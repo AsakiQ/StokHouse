@@ -48,6 +48,9 @@ public sealed partial class ModEntry
             choices.Add(("outbox", T("outbox")));
         if (offers.Count > 0)
             choices.Add(("offers", T("offers")));
+        var payment = CurrentPayment();
+        if (payment is { Paused: false } && payment.Request.Guest == id && payment.Phase is PaymentPhase.Collect or PaymentPhase.Schedule)
+            choices.Add(("cancel-upgrade", T("upgrade-cancel")));
         if (id == game.HostId)
             choices.Add(("reset", T("reset")));
 
@@ -66,6 +69,13 @@ public sealed partial class ModEntry
                 case "offers":
                     if (offers.Values.OrderBy(item => item.Expires).FirstOrDefault() is { } offer)
                         ShowUpgrade(offer);
+                    break;
+                case "cancel-upgrade":
+                    Confirm(T("upgrade-cancel-confirm"), yes =>
+                    {
+                        if (yes)
+                            Submit("upgrade-cancel", request: payment!.Request.Id);
+                    });
                     break;
                 case "reset": Confirm(T("reset-confirm"), yes => { if (yes) Submit("reset"); }); break;
             }
@@ -149,11 +159,16 @@ public sealed partial class ModEntry
         });
     }
 
-    private void RequestUpgrade(long actor, long quotedOwner, int? quotedLevel, DateTimeOffset now)
+    private void RequestUpgrade(long actor, long quotedOwner, int? quotedLevel, Guid operation, DateTimeOffset now)
     {
         long house = households.Home(actor);
         LogRobin($"request guest={actor} house={house} quotedOwner={quotedOwner} level={quotedLevel}");
-        if (granted.Count != 0)
+        var previous = CurrentPayment();
+        if (paymentFault || previous?.Paused == true)
+            RejectUpgrade(actor, "upgrade-recovery");
+        else if (previous?.HasSeen(operation) == true)
+            LogRobin($"ignored replayed order {operation}");
+        else if (previous?.Active == true)
             RejectUpgrade(actor, "upgrade-pending");
         else if (!households.IsGuest(actor) || quotedOwner != house || quotedLevel is not (0 or 1 or 2))
             RejectUpgrade(actor, "upgrade-quote-changed");
@@ -169,9 +184,13 @@ public sealed partial class ModEntry
             RejectUpgrade(actor, "robin-unavailable");
         else if (game.UpgradeBlock(owner, quotedLevel.Value) is { } blocked)
             RejectUpgrade(actor, blocked);
+        else if (game.WalletChangePending)
+            RejectUpgrade(actor, "upgrade-wallet-change");
+        else if (game.PaymentResources(guest, quotedLevel.Value) is { } resourceError)
+            RejectUpgrade(actor, resourceError);
         else
         {
-            Outcome result = households.RequestUpgrade(actor, quotedLevel.Value, now, out var request);
+            Outcome result = households.RequestUpgrade(actor, quotedLevel.Value, now, out var request, operation);
             if (request is null)
             {
                 RejectUpgrade(actor, result.Code);
@@ -192,8 +211,8 @@ public sealed partial class ModEntry
     internal static bool RequiresOwnerApproval(UpgradePolicy policy, bool separateWallets) =>
         policy != UpgradePolicy.JointWallet || separateWallets;
 
-    internal static bool HasPurchaseApproval(UpgradeGrant grant, UpgradePolicy policy, bool separateWallets) =>
-        policy != UpgradePolicy.Disabled && (grant.OwnerApproved || !RequiresOwnerApproval(policy, separateWallets));
+    internal static bool HasPurchaseApproval(bool ownerApproved, UpgradePolicy policy, bool separateWallets) =>
+        policy != UpgradePolicy.Disabled && (ownerApproved || !RequiresOwnerApproval(policy, separateWallets));
 
     private void RejectUpgrade(long player, string code)
     {
@@ -203,7 +222,7 @@ public sealed partial class ModEntry
 
     private void DecideUpgrade(long owner, Guid id, bool accept, DateTimeOffset now, bool ownerApproved = true)
     {
-        if (!households.OwnsUpgrade(id, owner, now, out var request) || request is null || granted.ContainsKey(id))
+        if (!households.OwnsUpgrade(id, owner, now, out var request) || request is null || CurrentPayment()?.HasSeen(id) == true)
         {
             LogRobin($"decision ignored request={id} owner={owner}; missing, expired or already granted");
             Notify(owner, "expired");
@@ -228,6 +247,8 @@ public sealed partial class ModEntry
             blocked = "upgrade-owner-offline";
         else
             blocked = game.UpgradeBlock(farmer, request.Level);
+        if (blocked is null && game!.WalletChangePending)
+            blocked = "upgrade-wallet-change";
 
         if (blocked is not null)
         {
@@ -236,9 +257,7 @@ public sealed partial class ModEntry
             Notify(owner, blocked);
             return;
         }
-        granted[id] = request;
-        LogRobin($"grant request={id} owner={owner} level={request.Level} ownerApproved={ownerApproved}");
-        Deliver(owner, new UpgradeGrant(request, ownerApproved), "upgrade-run", ReceiveGrant);
+        BeginPayment(request, ownerApproved);
     }
 
     private void ReceiveUpgrade(UpgradeRequest item)
@@ -268,64 +287,5 @@ public sealed partial class ModEntry
             if (offers.Remove(item.Id))
                 Submit(reply == "accept" ? "upgrade-accept" : "upgrade-decline", request: item.Id);
         });
-    }
-
-    private void ReceiveGrant(UpgradeGrant grant)
-    {
-        var item = grant.Request;
-        if (item.Owner != game!.LocalId || item.Level is < 0 or > 2)
-        {
-            LogRobin($"ignored grant request={item.Id} owner={item.Owner} level={item.Level}");
-            return;
-        }
-        dialogs.Enqueue(() =>
-        {
-            var (code, replay) = completedLocally.Run(item, DateTimeOffset.UtcNow, () => StartGrantedUpgrade(grant));
-            LogRobin($"purchase request={item.Id} owner={item.Owner} level={item.Level} result={code} replay={replay}");
-            var result = new UpgradeResult(item.Id, code);
-            if (StardewModdingAPI.Context.IsMainPlayer)
-                OnUpgradeResult(item.Owner, result);
-            else
-                Send(result, "upgrade-result", game.HostId);
-            if (code != "upgrade-started" && !replay)
-                Tell(code);
-        });
-    }
-
-    private string StartGrantedUpgrade(UpgradeGrant grant)
-    {
-        var item = grant.Request;
-        if (households.Home(item.Guest) != item.Owner)
-            return "upgrade-quote-changed";
-        var policy = households.Rules(item.Owner).Upgrade;
-        if (policy == UpgradePolicy.Disabled)
-            return "upgrade-disabled";
-        if (!HasPurchaseApproval(grant, policy, GameApi.Separate(game!.Player)))
-            return "upgrade-approval-required";
-        try
-        {
-            return game!.StartNativeUpgrade(item.Level);
-        }
-        catch (Exception ex)
-        {
-            Monitor.Log($"Stok House could not complete native upgrade {item.Id}: {ex}", StardewModdingAPI.LogLevel.Error);
-            return GameApi.UpgradeDays(game!.Player) > 0 ? "upgrade-started" : "upgrade-error";
-        }
-    }
-
-    private void OnUpgradeResult(long actor, UpgradeResult result)
-    {
-        if (!granted.TryGetValue(result.Request, out var request) || request.Owner != actor ||
-            result.Code is not ("upgrade-started" or "upgrade-unavailable" or "upgrade-error" or "funds" or "materials" or
-                "expired" or "upgrade-quote-changed" or "upgrade-disabled" or "upgrade-approval-required" or "upgrade-max" or
-                "upgrade-in-progress" or "robin-busy" or "robin-unavailable"))
-        {
-            LogRobin($"ignored result request={result.Request} sender={actor} result={result.Code}");
-            return;
-        }
-        granted.Remove(result.Request);
-        households.CompleteUpgrade(result.Request);
-        LogRobin($"completed request={result.Request} guest={request.Guest} result={result.Code}");
-        Notify(request.Guest, result.Code);
     }
 }

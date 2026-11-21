@@ -116,7 +116,7 @@ public sealed class Households
         return new("rules-saved", true);
     }
 
-    public Outcome RequestUpgrade(long guest, int level, DateTimeOffset now, out UpgradeRequest? request)
+    public Outcome RequestUpgrade(long guest, int level, DateTimeOffset now, out UpgradeRequest? request, Guid? orderId = null)
     {
         request = null;
         Expire(now);
@@ -127,7 +127,7 @@ public sealed class Households
             return new("upgrade-disabled");
         if (upgrades.Count != 0)
             return new("upgrade-pending");
-        request = new(Guid.NewGuid(), owner, guest, level, now + RequestLifetime);
+        request = new(orderId ?? Guid.NewGuid(), owner, guest, level, now + RequestLifetime);
         upgrades.Add(request.Id, request);
         return new("upgrade-sent");
     }

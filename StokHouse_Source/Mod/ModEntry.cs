@@ -15,8 +15,6 @@ public sealed partial class ModEntry : Mod
     private readonly Dictionary<Guid, Invitation> inbox = new();
     private readonly Dictionary<Guid, Invitation> outbox = new();
     private readonly Dictionary<Guid, UpgradeRequest> offers = new();
-    private readonly Dictionary<Guid, UpgradeRequest> granted = new();
-    private readonly UpgradeReceipts completedLocally = new();
     private readonly Queue<Action> dialogs = new();
     private GameApi? game;
     private ModConfig config = new();
@@ -90,8 +88,7 @@ public sealed partial class ModEntry : Mod
         inbox.Clear();
         outbox.Clear();
         offers.Clear();
-        granted.Clear();
-        completedLocally.Clear();
+        ClearPayments();
         dialogs.Clear();
         cachedHomes.Clear();
     }
@@ -143,11 +140,12 @@ public sealed partial class ModEntry : Mod
             RemoveExpired(inbox, item => item.Expires, now);
             RemoveExpired(outbox, item => item.Expires, now);
             RemoveExpired(offers, item => item.Expires, now);
-            RemoveExpired(granted, item => item.Expires, now);
-            completedLocally.Expire(now);
             foreach (var id in seen.Where(item => item.Value < now).Select(item => item.Key).ToArray())
                 seen.Remove(id);
         }
+
+        if (Running && args.IsMultipleOf(15))
+            TickPayments();
 
         if (!Running || !Context.CanPlayerMove || (bool)GameApi.Read(game!.Game, "eventUp")!)
             return;
@@ -226,7 +224,11 @@ public sealed partial class ModEntry : Mod
     private void OnDisconnect(object? sender, PeerDisconnectedEventArgs args)
     {
         if (Context.IsMainPlayer)
-            households.ForgetRequests(args.Peer.PlayerID);
+        {
+            long player = args.Peer.PlayerID;
+            households.ForgetRequests(player);
+            CancelPaymentOnDisconnect(player);
+        }
     }
 
     private bool SameVersion(long player) => player == game!.LocalId ||
@@ -269,8 +271,6 @@ public sealed partial class ModEntry : Mod
             {
                 if (SameVersion(args.FromPlayerID) && type == "command")
                     HandleCommand(args.FromPlayerID, args.ReadAs<Command>());
-                else if (SameVersion(args.FromPlayerID) && type == "upgrade-result")
-                    OnUpgradeResult(args.FromPlayerID, args.ReadAs<UpgradeResult>());
                 return;
             }
 
@@ -283,7 +283,6 @@ public sealed partial class ModEntry : Mod
                 case "invitation": ReceiveInvitation(args.ReadAs<Invitation>()); break;
                 case "invitation-out": RememberOutgoing(args.ReadAs<Invitation>()); break;
                 case "upgrade": ReceiveUpgrade(args.ReadAs<UpgradeRequest>()); break;
-                case "upgrade-run": ReceiveGrant(args.ReadAs<UpgradeGrant>()); break;
             }
         }
         catch (Exception ex)
@@ -376,7 +375,7 @@ public sealed partial class ModEntry : Mod
                 break;
             case "accept":
             case "decline":
-                if (command.Action == "accept" && granted.Values.Any(item => item.Guest == actor))
+                if (command.Action == "accept" && IsPayingForUpgrade(actor))
                 {
                     Notify(actor, "upgrade-pending");
                     return;
@@ -400,7 +399,7 @@ public sealed partial class ModEntry : Mod
                     Notify(cancelled.Guest, "cancelled", actor);
                 break;
             case "leave":
-                if (granted.Values.Any(item => item.Guest == actor))
+                if (IsPayingForUpgrade(actor))
                 {
                     Notify(actor, "upgrade-pending");
                     return;
@@ -413,7 +412,7 @@ public sealed partial class ModEntry : Mod
             case "reset":
                 if (actor != game!.HostId)
                     return;
-                if (granted.Count != 0)
+                if (CurrentPayment()?.Active == true)
                 {
                     Notify(actor, "upgrade-pending");
                     return;
@@ -427,7 +426,10 @@ public sealed partial class ModEntry : Mod
                 result = new("reset-done", true);
                 break;
             case "upgrade":
-                RequestUpgrade(actor, command.Player, command.UpgradeLevel, now);
+                RequestUpgrade(actor, command.Player, command.UpgradeLevel, command.Operation, now);
+                return;
+            case "upgrade-cancel":
+                CancelPayment(actor, command.Request);
                 return;
             case "upgrade-accept":
             case "upgrade-decline":

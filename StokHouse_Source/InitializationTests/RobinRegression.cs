@@ -7,7 +7,6 @@ namespace StokHouse;
 
 internal static class RobinRegression
 {
-    private static readonly DateTimeOffset Now = new(2026, 11, 21, 0, 0, 0, TimeSpan.Zero);
     private static readonly string[] Carpenter = { "carpenter" };
     private static GameApi game = null!;
     private static string? refusal;
@@ -128,77 +127,13 @@ internal static class RobinRegression
 
         test("automatic grants cannot charge after switching to separate wallets or owner confirmation", () =>
         {
-            var automatic = new UpgradeGrant(Grant(), false);
-            var approved = automatic with { OwnerApproved = true };
-            Eq(true, ModEntry.HasPurchaseApproval(automatic, UpgradePolicy.JointWallet, false));
-            Eq(false, ModEntry.HasPurchaseApproval(automatic, UpgradePolicy.JointWallet, true));
-            Eq(false, ModEntry.HasPurchaseApproval(automatic, UpgradePolicy.Confirm, false));
-            Eq(true, ModEntry.HasPurchaseApproval(approved, UpgradePolicy.Confirm, true));
-            Eq(false, ModEntry.HasPurchaseApproval(approved, UpgradePolicy.Disabled, false));
+            Eq(true, ModEntry.HasPurchaseApproval(false, UpgradePolicy.JointWallet, false));
+            Eq(false, ModEntry.HasPurchaseApproval(false, UpgradePolicy.JointWallet, true));
+            Eq(false, ModEntry.HasPurchaseApproval(false, UpgradePolicy.Confirm, false));
+            Eq(true, ModEntry.HasPurchaseApproval(true, UpgradePolicy.Confirm, true));
+            Eq(false, ModEntry.HasPurchaseApproval(true, UpgradePolicy.Disabled, false));
         });
 
-        test("replaying a grant charges the owner once and another grant cannot charge while construction is pending", () =>
-        {
-            ResetOwner(30_000, 900);
-            var receipts = new UpgradeReceipts();
-            var grant = Grant();
-            Eq(("upgrade-started", false), receipts.Run(grant, Now, () => game.StartNativeUpgrade(grant.Level)));
-            Eq(("upgrade-started", true), receipts.Run(grant, Now, () => game.StartNativeUpgrade(grant.Level)));
-            Eq(("upgrade-in-progress", false), receipts.Run(Grant(), Now, () => game.StartNativeUpgrade(grant.Level)));
-            Eq(1, Game1.currentLocation.NativePurchases);
-            Eq(20_000, Game1.player.Money);
-            Eq(450, Game1.player.Items.Wood);
-        });
-
-        test("expired grants, stale prices, construction and scarce resources do not invoke the native charge", () =>
-        {
-            var receipts = new UpgradeReceipts();
-            var old = Grant();
-            ResetOwner(9_999, 600);
-            Eq(("expired", false), receipts.Run(old, old.Expires, () => game.StartNativeUpgrade(0)));
-            Eq("funds", game.StartNativeUpgrade(0));
-            ResetOwner(10_000, 449);
-            Eq("materials", game.StartNativeUpgrade(0));
-            ResetOwner(10_000, 450);
-            Game1.RobinBusy = true;
-            Eq("robin-busy", game.StartNativeUpgrade(0));
-            Game1.RobinBusy = false;
-            Game1.player.HouseUpgradeLevel = 1;
-            Eq("upgrade-quote-changed", game.StartNativeUpgrade(0));
-            Eq(0, Game1.currentLocation.NativePurchases);
-            Eq(10_000, Game1.player.Money);
-            Eq(450, Game1.player.Items.Wood);
-        });
-
-        test("a native exception leaves the grant consumed so it cannot retry a charge", () =>
-        {
-            var receipts = new UpgradeReceipts();
-            var grant = Grant();
-            int calls = 0;
-            try
-            {
-                receipts.Run(grant, Now, () =>
-                {
-                    calls++;
-                    throw new InvalidOperationException("native invocation failed");
-                });
-            }
-            catch (InvalidOperationException) { }
-            Eq(("upgrade-error", true), receipts.Run(grant, Now, () => { calls++; return "upgrade-started"; }));
-            Eq(1, calls);
-        });
-    }
-
-    private static UpgradeRequest Grant() => new(Guid.NewGuid(), 1, 2, 0, Now.AddMinutes(2));
-
-    private static void ResetOwner(int money, int wood)
-    {
-        Game1.currentLocation.NativePurchases = 0;
-        Game1.player.Money = money;
-        Game1.player.Items.Wood = wood;
-        Game1.player.daysUntilHouseUpgrade.Value = -1;
-        Game1.player.HouseUpgradeLevel = 0;
-        Game1.RobinBusy = false;
     }
 
     private static Response[] Options() => new[] { new Response("Shop", ""), new Response("Upgrade", "Cabin"),

@@ -57,8 +57,8 @@ Test("all targeted Harmony patches resolve and install on signature fixtures", (
 {
     var game = NewApi();
     var patches = ModEntry.GamePatches.Resolve(game);
-    Eq(20, patches.Count);
-    Eq(20, patches.Select(patch => patch.Original).Distinct().Count());
+    Eq(22, patches.Count);
+    Eq(22, patches.Select(patch => patch.Original).Distinct().Count());
     var mail = patches.Single(patch => patch.Handler.Name == "MailAction");
     Eq(typeof(string[]), mail.Original.GetParameters()[0].ParameterType);
     var building = patches.Single(patch => patch.Handler.Name == "CabinTileProperty");
@@ -66,8 +66,8 @@ Test("all targeted Harmony patches resolve and install on signature fixtures", (
     var harmony = new Harmony(modId);
     try
     {
-        Eq(20, ModEntry.GamePatches.Apply(harmony, game, new ModEntry()));
-        Eq(20, harmony.GetPatchedMethods().Count());
+        Eq(22, ModEntry.GamePatches.Apply(harmony, game, new ModEntry()));
+        Eq(22, harmony.GetPatchedMethods().Count());
         Eq(true, new GameLocation().performAction(new[] { "Mailbox" }, new Farmer(), new xTile.Dimensions.Location()));
         Eq(PointZero(), new Farmer().getMailboxPosition());
     }
@@ -90,6 +90,7 @@ Test("missing initialization targets fail before any patch is installed", () =>
 });
 
 RobinRegression.Run(Test);
+PaymentRegression.Run(Test);
 
 string temp = Path.Combine(Path.GetTempPath(), $"stok-house-config-tests-{Guid.NewGuid():N}");
 Directory.CreateDirectory(temp);
@@ -156,7 +157,7 @@ if (args is ["--game-path", var location])
         {
             var game = new GameApi(name => (name.StartsWith("xTile.", StringComparison.Ordinal) ? tileAssembly : gameAssembly)
                 .GetType(name, throwOnError: true)!);
-            Eq(20, ModEntry.GamePatches.Resolve(game).Count);
+            Eq(22, ModEntry.GamePatches.Resolve(game).Count);
         }
         finally
         {

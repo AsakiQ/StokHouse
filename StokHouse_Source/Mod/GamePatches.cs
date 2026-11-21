@@ -67,6 +67,11 @@ public sealed partial class ModEntry
                 api.Location, typeof(int), typeof(int), api.Farmer);
             Patch(api.Wallpaper, "placementAction", FurniturePlace, false,
                 api.Location, typeof(int), typeof(int), api.Farmer);
+            foreach (string method in new[] { "MergeWallets", "SeparateWallets" })
+            {
+                var original = GameReflection.Method(api.ManorHouse, method, BindingFlags.Static | BindingFlags.DeclaredOnly);
+                patches.Add((original, ((Func<bool>)WalletTransition).Method, PatchKind.Prefix));
+            }
 
             return patches;
 
@@ -84,6 +89,15 @@ public sealed partial class ModEntry
                 patches.Add((original, ((Func<IEnumerable<CodeInstruction>, MethodBase, IEnumerable<CodeInstruction>>)RobinChoiceArgument).Method,
                     PatchKind.Transpiler));
             }
+        }
+
+        private static bool WalletTransition()
+        {
+            if (!mod.active || !Context.IsWorldReady || !Context.IsMainPlayer || !mod.PaymentWalletHeld())
+                return true;
+            // Keep the same wallet reachable until the held gold is settled. Vanilla retries next night.
+            mod.LogRobin("wallet conversion deferred while an upgrade holds gold");
+            return false;
         }
 
         private static bool Hidden(object building) => mod.Running &&
@@ -275,7 +289,9 @@ public sealed partial class ModEntry
         else
         {
             long id = households.Home(game.LocalId);
-            if (households.Rules(id).Upgrade == Core.UpgradePolicy.Disabled)
+            if (paymentFault || CurrentPayment()?.Paused == true)
+                refusal = "upgrade-recovery";
+            else if (households.Rules(id).Upgrade == Core.UpgradePolicy.Disabled)
                 refusal = "upgrade-disabled";
             else if (!IsOnline(id) || !SameVersion(id))
                 refusal = "upgrade-owner-offline";

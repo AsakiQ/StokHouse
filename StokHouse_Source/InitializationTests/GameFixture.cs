@@ -40,10 +40,14 @@ namespace StardewValley
     public class Farmer : Character
     {
         public TestInventory Items { get; } = new();
+        public long UniqueMultiplayerID { get; set; } = 1;
         public int HouseUpgradeLevel { get; set; }
         public Counter daysUntilHouseUpgrade { get; } = new() { Value = -1 };
-        public int Money { get; set; }
+        public Flag changeWalletTypeTonight { get; } = new();
+        public TestTeam team { get; set; } = new();
+        public bool useSeparateWallets => team.Separate;
         public Point getMailboxPosition() => Point.Zero;
+        public bool isActive() => true;
     }
 
     public class Counter
@@ -51,11 +55,46 @@ namespace StardewValley
         public int Value { get; set; }
     }
 
+    public class Flag
+    {
+        public bool Value { get; set; }
+    }
+
+    public class TestTeam
+    {
+        public bool Separate { get; set; }
+        public Counter Shared { get; } = new();
+        private readonly Dictionary<long, Counter> individual = new();
+        public Counter GetMoney(Farmer payer)
+        {
+            if (!Separate)
+                return Shared;
+            if (!individual.TryGetValue(payer.UniqueMultiplayerID, out var wallet))
+                individual[payer.UniqueMultiplayerID] = wallet = new Counter();
+            return wallet;
+        }
+    }
+
     public class TestInventory
     {
-        public int Wood { get; set; }
-        public bool ContainsId(string item) => ContainsId(item, 1);
-        public bool ContainsId(string item, int quantity) => item == "(O)388" && Wood >= quantity;
+        private readonly Item?[] items = new Item?[3];
+        public int Count => items.Length;
+        public Item? this[int index] { get => items[index]; set => items[index] = value; }
+    }
+
+    public interface ISalable { }
+
+    public class Item : ISalable
+    {
+        public string QualifiedItemId { get; set; } = "";
+        public int Stack { get; set; }
+        public int maximumStackSize() => 999;
+        public bool canStackWith(ISalable other) => other is Item item && item.QualifiedItemId == QualifiedItemId;
+    }
+
+    public static class ItemRegistry
+    {
+        public static Item Create(string id, int count, int quality, bool allowNull) => new() { QualifiedItemId = id, Stack = count };
     }
 
     public class NPC
@@ -77,7 +116,6 @@ namespace StardewValley
         public afterQuestionBehavior? callback;
         public string? lastQuestionKey;
         public string? LastNativeAnswer;
-        public int NativePurchases;
         public bool destroyStructure(Building building) => true;
         public bool performAction(string action, Farmer who, xTile.Dimensions.Location tile) => false;
         public bool performAction(string[] action, Farmer who, xTile.Dimensions.Location tile) => true;
@@ -103,13 +141,7 @@ namespace StardewValley
         }
         public void mailbox() { }
 
-        private void houseUpgradeAccept()
-        {
-            NativePurchases++;
-            Game1.player.daysUntilHouseUpgrade.Value = 3;
-            Game1.player.Money -= 10_000;
-            Game1.player.Items.Wood -= 450;
-        }
+
     }
 
     public class Farm : GameLocation
@@ -149,6 +181,12 @@ namespace StardewValley.Locations
     }
 
     public class Cabin : FarmHouse { }
+
+    public class ManorHouse : GameLocation
+    {
+        public static void MergeWallets() { }
+        public static void SeparateWallets() { }
+    }
 }
 
 namespace StardewValley.Objects

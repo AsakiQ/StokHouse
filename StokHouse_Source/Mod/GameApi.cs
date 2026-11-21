@@ -10,7 +10,7 @@ internal sealed record Home(long Owner, string Name, object Interior, object? Ca
     public bool IsCabin => Cabin is not null;
 }
 
-internal sealed class GameApi
+internal sealed partial class GameApi
 {
     internal readonly Type Game;
     internal readonly Type Farmer;
@@ -23,10 +23,12 @@ internal sealed class GameApi
     internal readonly Type Furniture;
     internal readonly Type Bed;
     internal readonly Type Wallpaper;
+    internal readonly Type ManorHouse;
 
     private readonly MethodInfo getFarm;
     private readonly MethodInfo getAllFarmers;
     private readonly MethodInfo getOnlineFarmers;
+    private readonly MethodInfo isFarmerActive;
     private readonly MethodInfo getCharacter;
     private readonly MethodInfo getBuildingInterior;
     private readonly MethodInfo getMainHouse;
@@ -37,11 +39,9 @@ internal sealed class GameApi
     private readonly MethodInfo question;
     private readonly ConstructorInfo createResponse;
     private readonly MethodInfo hud;
-    private readonly MethodInfo upgrade;
     private readonly MethodInfo construction;
 
     private readonly MethodInfo readMailbox;
-    private readonly MethodInfo containsItem;
     private readonly MethodInfo getModData;
     private readonly MethodInfo setModData;
 
@@ -61,11 +61,13 @@ internal sealed class GameApi
         Furniture = resolveType("StardewValley.Objects.Furniture");
         Bed = resolveType("StardewValley.Objects.BedFurniture");
         Wallpaper = resolveType("StardewValley.Objects.Wallpaper");
+        ManorHouse = resolveType("StardewValley.Locations.ManorHouse");
         Type npc = resolveType("StardewValley.NPC");
 
         getFarm = GameReflection.Method(Game, "getFarm", BindingFlags.Static);
         getAllFarmers = GameReflection.Method(Game, "getAllFarmers", BindingFlags.Static);
         getOnlineFarmers = GameReflection.Method(Game, "getOnlineFarmers", BindingFlags.Static);
+        isFarmerActive = GameReflection.Method(Farmer, "isActive", BindingFlags.Instance);
         getCharacter = GameReflection.Method(Game, "getCharacterFromName", BindingFlags.Static,
             typeof(string), typeof(bool), typeof(bool));
         getBuildingInterior = GameReflection.Method(Building, "GetIndoors", BindingFlags.Instance);
@@ -86,12 +88,22 @@ internal sealed class GameApi
         question = GameReflection.Method(Location, "createQuestionDialogue", BindingFlags.Instance,
             typeof(string), Response.MakeArrayType(), afterQuestion, npc);
         hud = GameReflection.Method(Game, "showGlobalMessage", BindingFlags.Static, typeof(string));
-        upgrade = GameReflection.Method(Location, "houseUpgradeAccept", BindingFlags.Instance);
         construction = GameReflection.Method(Game, "IsThereABuildingUnderConstruction", BindingFlags.Static, typeof(string));
         readMailbox = GameReflection.Method(Location, "mailbox", BindingFlags.Instance);
 
-        Type inventory = GameReflection.MemberType(Farmer, "Items");
-        containsItem = GameReflection.Method(inventory, "ContainsId", BindingFlags.Instance, typeof(string), typeof(int));
+        var inventory = GameReflection.MemberType(Farmer, "Items");
+        inventoryGet = GameReflection.Method(inventory, "get_Item", BindingFlags.Instance, typeof(int));
+        inventorySet = GameReflection.Method(inventory, "set_Item", BindingFlags.Instance, typeof(int), resolveType("StardewValley.Item"));
+        var item = resolveType("StardewValley.Item");
+        setStack = GameReflection.Method(item, "set_Stack", BindingFlags.Instance, typeof(int));
+        maxStack = GameReflection.Method(item, "maximumStackSize", BindingFlags.Instance);
+        canStack = GameReflection.Method(item, "canStackWith", BindingFlags.Instance, resolveType("StardewValley.ISalable"));
+        createItem = GameReflection.Method(resolveType("StardewValley.ItemRegistry"), "Create", BindingFlags.Static,
+            typeof(string), typeof(int), typeof(int), typeof(bool));
+        getWallet = GameReflection.Method(GameReflection.MemberType(Farmer, "team"), "GetMoney", BindingFlags.Instance, Farmer);
+        setIntValue = GameReflection.Method(getWallet.ReturnType, "set_Value", BindingFlags.Instance, typeof(int));
+        var days = GameReflection.MemberType(Farmer, "daysUntilHouseUpgrade");
+        setUpgradeDays = GameReflection.Method(days, "set_Value", BindingFlags.Instance, typeof(int));
         Type modData = GameReflection.MemberType(Farmer, "modData");
         getModData = GameReflection.Method(modData, "TryGetValue", BindingFlags.Instance, typeof(string), typeof(string).MakeByRefType());
         setModData = GameReflection.Method(modData, "set_Item", BindingFlags.Instance, typeof(string), typeof(string));
@@ -118,6 +130,7 @@ internal sealed class GameApi
     internal IEnumerable<object> Online() => ((IEnumerable)getOnlineFarmers.Invoke(null, null)!).Cast<object>();
     internal IEnumerable<object> Farmers() => ((IEnumerable)getAllFarmers.Invoke(null, null)!).Cast<object>();
     internal object? FindFarmer(long id) => Farmers().FirstOrDefault(farmer => Id(farmer) == id);
+    internal bool IsSavedOffline(object farmer) => !(bool)isFarmerActive.Invoke(farmer, null)!;
     internal string Name(long id) => FindFarmer(id) is { } farmer ? (string)Read(farmer, "Name")! : id.ToString();
 
     internal Dictionary<long, Home> Homes()
@@ -183,29 +196,6 @@ internal sealed class GameApi
         return null;
     }
 
-    internal string StartNativeUpgrade(int level)
-    {
-        object player = Player;
-        if (UpgradeBlock(player, level) is { } blocked)
-            return blocked;
-        if (Robin is null)
-            return "robin-unavailable";
-
-        // Check before calling Robin so the mod can give the initiator a useful result.
-        var (price, item, quantity) = Price(level);
-        if ((int)Read(player, "Money")! < price)
-            return "funds";
-        if (item is not null)
-        {
-            object items = Read(player, "Items")!;
-            if (!(bool)containsItem.Invoke(items, new object[] { item, quantity })!)
-                return "materials";
-        }
-
-        upgrade.Invoke(Current, null);
-        return UpgradeDays(player) > 0 ? "upgrade-started" : "upgrade-unavailable";
-    }
-
     internal static (int Gold, string? Item, int Quantity) Price(int level) => level switch
     {
         0 => (10_000, "(O)388", 450),
@@ -214,16 +204,20 @@ internal sealed class GameApi
         _ => throw new ArgumentOutOfRangeException(nameof(level))
     };
 
-    internal string? Load(string key)
+    internal string? Load(string key) => Load(Master, key);
+
+    internal string? Load(object farmer, string key)
     {
-        object data = Read(Master, "modData")!;
+        object data = Read(farmer, "modData")!;
         var values = new object?[] { key, null };
         return (bool)getModData.Invoke(data, values)! ? (string?)values[1] : null;
     }
 
-    internal void Store(string key, string value)
+    internal void Store(string key, string value) => Store(Master, key, value);
+
+    internal void Store(object farmer, string key, string value)
     {
-        object data = Read(Master, "modData")!;
+        object data = Read(farmer, "modData")!;
         setModData.Invoke(data, new object[] { key, value });
     }
 
