@@ -3,6 +3,7 @@ using HarmonyLib;
 using StardewModdingAPI;
 using StardewModdingAPI.Events;
 using StokHouse.Core;
+using StokHouse.FamilyBudget;
 
 namespace StokHouse;
 
@@ -92,6 +93,7 @@ public sealed partial class ModEntry : Mod
         offers.Clear();
         ClearPayments();
         ClearBudgets();
+        ClearShop();
         dialogs.Clear();
         cachedHomes.Clear();
     }
@@ -153,7 +155,14 @@ public sealed partial class ModEntry : Mod
         }
 
         if (Running && args.IsMultipleOf(15))
+        {
             TickPayments();
+            if (BudgetOptIn)
+            {
+                ApplyShopGrant();
+                SettleShopReceipts();
+            }
+        }
 
         if (!Running || !Context.CanPlayerMove || (bool)GameApi.Read(game!.Game, "eventUp")!)
             return;
@@ -278,8 +287,13 @@ public sealed partial class ModEntry : Mod
         {
             if (Context.IsMainPlayer)
             {
-                if (SameVersion(args.FromPlayerID) && type == "command")
-                    HandleCommand(args.FromPlayerID, args.ReadAs<Command>());
+                if (SameVersion(args.FromPlayerID))
+                {
+                    if (type == "command")
+                        HandleCommand(args.FromPlayerID, args.ReadAs<Command>());
+                    else if (type == "shop-request" && BudgetOptIn)
+                        ProcessShopRequest(args.FromPlayerID, args.ReadAs<ShopRequest>());
+                }
                 return;
             }
 
@@ -293,6 +307,8 @@ public sealed partial class ModEntry : Mod
                 case "invitation-out": RememberOutgoing(args.ReadAs<Invitation>()); break;
                 case "upgrade": ReceiveUpgrade(args.ReadAs<UpgradeRequest>()); break;
                 case "budget-state": ReceiveBudgetFrame(args.ReadAs<BudgetFrame>()); break;
+                case "shop-grant": ReceiveShopGrant(args.ReadAs<ShopOrder>()); break;
+                case "shop-result": ReceiveShopResult(args.ReadAs<ShopResult>()); break;
             }
         }
         catch (Exception ex)
@@ -360,6 +376,7 @@ public sealed partial class ModEntry : Mod
             {
                 budgetPeers.Add(actor);
                 SendBudgetFrame(actor);
+                ResendShopGrant(actor);
             }
             return;
         }

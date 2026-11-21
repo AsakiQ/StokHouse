@@ -133,6 +133,8 @@ internal static class MoneyAudit
         Require("StardewValley.Menus.ShopMenu.tryToPurchaseItem", "StardewValley.Menus.ShopMenu.chargePlayer", 2);
         Require("StardewValley.Menus.ShopMenu.receiveLeftClick", "StardewValley.Menus.ShopMenu.chargePlayer", 1);
         Require("StardewValley.Menus.ShopMenu.receiveRightClick", "StardewValley.Menus.ShopMenu.chargePlayer", 1);
+        Require("StardewValley.Menus.ShopMenu.receiveLeftClick", "StardewValley.Menus.ShopMenu.getPlayerCurrencyAmount", 1);
+        Require("StardewValley.Menus.ShopMenu.receiveRightClick", "StardewValley.Menus.ShopMenu.getPlayerCurrencyAmount", 1);
         Require("StardewValley.GameLocation.houseUpgradeAccept", "StardewValley.Farmer.set_Money", 3);
 
         // Iterator method names can change whenever the game recompiles. Keep both actual

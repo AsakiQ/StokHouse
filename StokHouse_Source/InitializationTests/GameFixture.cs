@@ -12,6 +12,9 @@ namespace StardewValley
         public static readonly string version = "1.6.15";
         public static readonly ulong uniqueIDForThisGame = 763298;
         public static readonly GameLocation currentLocation = new();
+        public static readonly LocalizedContentManager content = new();
+        public static readonly WorldDate Date = new();
+        public static object? activeClickableMenu;
         public static readonly Farmer MasterPlayer = new();
         public static Farmer player => MasterPlayer;
         public static bool RobinBusy { get; set; }
@@ -33,6 +36,14 @@ namespace StardewValley
         public static bool IsThereABuildingUnderConstruction(string builder) => RobinBusy;
     }
 
+    public sealed class LocalizedContentManager { }
+    public sealed class WorldDate { public int TotalDays { get; set; } = 1; }
+    public sealed class ShopCatalog { public int Currency; }
+    public static class DataLoader
+    {
+        public static Dictionary<string, ShopCatalog> Shops(LocalizedContentManager manager) => new() { ["SeedShop"] = new() };
+    }
+
     public class Character
     {
         public Dictionary<string, string> modData { get; } = new();
@@ -41,6 +52,8 @@ namespace StardewValley
     public class Farmer : Character
     {
         public TestInventory Items { get; } = new();
+        public int MaxItems => Items.Count;
+        public GameLocation currentLocation = Game1.currentLocation;
         public long UniqueMultiplayerID { get; set; } = 1;
         public int HouseUpgradeLevel { get; set; }
         public Counter daysUntilHouseUpgrade { get; } = new() { Value = -1 };
@@ -89,8 +102,24 @@ namespace StardewValley
     {
         public string QualifiedItemId { get; set; } = "";
         public int Stack { get; set; }
+        public int Quality { get; set; }
+        public bool IsRecipe { get; set; }
+        public bool isLostItem;
+        public Item getOne() => (Item)MemberwiseClone();
         public int maximumStackSize() => 999;
         public bool canStackWith(ISalable other) => other is Item item && item.QualifiedItemId == QualifiedItemId;
+    }
+
+    public class Object : Item { }
+
+    public sealed class ItemStockInformation
+    {
+        public int Price = 20;
+        public int Stock = int.MaxValue;
+        public string? TradeItem;
+        public string? SyncedKey = "ParsnipSeed";
+        public Item? ItemToSyncStack;
+        public List<string>? ActionsOnPurchase;
     }
 
     public static class ItemRegistry
@@ -113,6 +142,7 @@ namespace StardewValley
 
     public class GameLocation
     {
+        public string NameOrUniqueName = "SeedShop";
         public delegate void afterQuestionBehavior(Farmer farmer, string answer);
         public afterQuestionBehavior? callback;
         public string? lastQuestionKey;
@@ -213,4 +243,52 @@ namespace StardewValley.Objects
 namespace xTile.Dimensions
 {
     public readonly struct Location { }
+}
+
+
+namespace StardewValley.Internal
+{
+    public static class ShopBuilder
+    {
+        public static Dictionary<ISalable, ItemStockInformation> Catalog { get; set; } = new();
+        public static Dictionary<ISalable, ItemStockInformation> GetShopStock(string id) => Catalog;
+    }
+}
+
+namespace StardewValley.Menus
+{
+    public sealed class ClickableComponent
+    {
+        public bool containsPoint(int x, int y) => x is >= 0 and < 20 && y is >= 0 and < 20;
+    }
+
+    public sealed class ShopMenu
+    {
+        public string ShopId = "SeedShop";
+        public ISalable? heldItem;
+        public int currency;
+        public bool readOnly;
+        public bool _isStorageShop;
+        public Action? onPurchase;
+        public Func<int, bool>? canPurchaseCheck;
+        public Dictionary<ISalable, ItemStockInformation> itemPriceAndStock = new();
+        public HashSet<ISalable> buyBackItems = new();
+        public List<ISalable> forSale = new();
+        public List<ClickableComponent> forSaleButtons = new() { new() };
+        public int currentItemIndex;
+        public int NativeClickQuantity;
+
+        private bool tryToPurchaseItem(ISalable item, ISalable? held_item, int stockToBuy, int x, int y) => false;
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static int getPlayerCurrencyAmount(Farmer who, int currencyType) => 1;
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public void receiveLeftClick(int x, int y, bool playSound = true) =>
+            NativeClickQuantity = getPlayerCurrencyAmount(Game1.player, currency);
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public void receiveRightClick(int x, int y, bool playSound = true) =>
+            NativeClickQuantity = getPlayerCurrencyAmount(Game1.player, currency);
+    }
 }

@@ -79,9 +79,15 @@ internal sealed class BudgetSession
         return state;
     }
 
-    internal static bool VerifyWalletProof(string? path, ulong farmIdentity, BudgetBook book) =>
-        book.SavedWallets is { } wallets &&
-        (wallets.Count == 0 || path is not null && SavedBudgetProbe.HasWallets(path, farmIdentity, wallets));
+    internal static bool VerifyWalletProof(string? path, ulong farmIdentity, BudgetBook book)
+    {
+        if (book.SavedWallets is not { } wallets)
+            return false;
+        var shop = FamilyShop.Open(book).Orders.Values.Where(order => book.Postings[order.Id].State != PostingState.Held)
+            .Select(order => new ShopOutcome(order, book.Postings[order.Id].State)).ToArray();
+        return wallets.Count == 0 && shop.Length == 0 ||
+            path is not null && SavedBudgetProbe.HasWallets(path, farmIdentity, wallets, shop);
+    }
 
     internal static BudgetBook Load(ulong farmIdentity, string? raw, IEnumerable<long> players)
     {
@@ -97,6 +103,7 @@ internal sealed class BudgetSession
         if (book.Farm != farm)
             throw new InvalidDataException("Family budget belongs to another farm.");
         book.Validate();
+        FamilyShop.Open(book).Validate();
         return book.WithPlayers(players);
     }
 }

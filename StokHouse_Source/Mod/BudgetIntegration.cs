@@ -44,7 +44,7 @@ public sealed partial class ModEntry
                 throw new InvalidDataException("The native farm ID is not available.");
             var book = BudgetSession.Load(farm, raw, Homes.Keys);
             savedBudgetPresent = book.Accounts.Count != 0;
-            if (book.LastCheckpoint != Guid.Empty && !BudgetSession.VerifyWalletProof(BudgetSavePath(), farm, book))
+            if (book.LastCheckpoint != Guid.Empty && (savedBudgetPresent || BudgetOptIn) && !BudgetSession.VerifyWalletProof(BudgetSavePath(), farm, book))
                 throw new InvalidDataException("The loaded family checkpoint disagrees with the saved personal wallets.");
             if (savedBudgetPresent && !BudgetSeparate())
                 throw new InvalidDataException("A saved family account requires separate game wallets.");
@@ -113,8 +113,14 @@ public sealed partial class ModEntry
     {
         if (!BudgetOptIn || !Context.IsWorldReady || Context.ScreenId != 0)
             return;
-        if (!Context.IsMainPlayer)
+        if (Context.IsMainPlayer)
+            ResendShopGrant(game!.LocalId);
+        else
+        {
             Send(new Command(Guid.NewGuid(), "budget-sync"), "command", game!.HostId);
+            if (localPurchase is { } purchase)
+                Send(purchase.Request, "shop-request", game.HostId);
+        }
     }
 
     private void SendBudgetFrame(long player)
@@ -186,7 +192,7 @@ public sealed partial class ModEntry
     private void PrepareBudgetSave()
     {
         if (!BudgetOptIn || !Running || !Context.IsMainPlayer || budgetFault || budgetSession is not { } session ||
-            session.Book.Accounts.Count == 0 && session.Book.Proposals.Count == 0)
+            session.Book.Accounts.Count == 0 && session.Book.Proposals.Count == 0 && session.Book.LastCheckpoint == Guid.Empty)
             return;
 
         try

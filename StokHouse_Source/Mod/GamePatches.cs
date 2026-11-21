@@ -73,6 +73,14 @@ public sealed partial class ModEntry
                 patches.Add((original, ((Func<bool>)WalletTransition).Method, PatchKind.Prefix));
             }
 
+            if (api.Shop is { } shop)
+            {
+                patches.Add((shop.Purchase, ((ShopPurchaseHandler)FamilyShopPurchase).Method, PatchKind.Prefix));
+                var click = ((Func<IEnumerable<CodeInstruction>, IEnumerable<CodeInstruction>>)ShopClickBalance).Method;
+                patches.Add((shop.LeftClick, click, PatchKind.Transpiler));
+                patches.Add((shop.RightClick, click, PatchKind.Transpiler));
+            }
+
             return patches;
 
             void Patch(Type type, string method, Delegate handler, bool postfix, params Type[] parameters)
@@ -89,6 +97,52 @@ public sealed partial class ModEntry
                 patches.Add((original, ((Func<IEnumerable<CodeInstruction>, MethodBase, IEnumerable<CodeInstruction>>)RobinChoiceArgument).Method,
                     PatchKind.Transpiler));
             }
+        }
+
+        private delegate bool ShopPurchaseHandler(object instance, object item, object? cursor, int quantity, ref bool result);
+
+        private static bool FamilyShopPurchase(object __instance, object __0, object? __1, int __2, ref bool __result)
+        {
+            if (!mod.HandleShopClick(__instance, __0, __1, __2))
+                return true;
+            __result = false; // The supported offer has unlimited stock and remains on the menu.
+            return false;
+        }
+
+        private static IEnumerable<CodeInstruction> ShopClickBalance(IEnumerable<CodeInstruction> original)
+        {
+            var instructions = original.ToList();
+            var currency = game.Shop!.CurrencyAmount;
+            if (instructions.Count(instruction => instruction.Calls(currency)) != 1)
+                throw new InvalidOperationException("Expected a unique bulk-price lookup in ShopMenu click handler.");
+            var target = ((Func<object, int, object, int, int, int>)ShopClickCurrency).Method;
+            foreach (var instruction in instructions)
+            {
+                if (!instruction.Calls(currency))
+                {
+                    yield return instruction;
+                    continue;
+                }
+
+                var menu = new CodeInstruction(OpCodes.Ldarg_0);
+                menu.labels.AddRange(instruction.labels);
+                menu.blocks.AddRange(instruction.blocks.Where(block => block.blockType != ExceptionBlockType.EndExceptionBlock));
+                var call = new CodeInstruction(OpCodes.Call, target);
+                call.blocks.AddRange(instruction.blocks.Where(block => block.blockType == ExceptionBlockType.EndExceptionBlock));
+                yield return menu;
+                yield return new CodeInstruction(OpCodes.Ldarg_1);
+                yield return new CodeInstruction(OpCodes.Ldarg_2);
+                yield return call;
+            }
+        }
+
+        private static int ShopClickCurrency(object farmer, int currency, object menu, int x, int y)
+        {
+            var shop = game.Shop!;
+            if (currency == 0 && ReferenceEquals(farmer, game.Player) && mod.ShopBalance() is int available &&
+                shop.OfferAt(menu, x, y) is { } item && shop.LocalQuote(menu, item, shop.Cursor(menu), 1) is not null)
+                return available;
+            return (int)shop.CurrencyAmount.Invoke(null, new[] { farmer, (object)currency })!;
         }
 
         private static bool WalletTransition()

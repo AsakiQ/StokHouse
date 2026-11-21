@@ -5,6 +5,51 @@ namespace StokHouse;
 internal sealed partial class GameApi
 {
     private readonly MethodInfo inventoryGet;
+    private readonly MethodInfo? oneItem;
+
+    internal static int StackSize(object item) => (int)Read(item, "Stack")!;
+    internal int StackLimit(object item) => (int)maxStack.Invoke(item, null)!;
+    internal bool StacksWith(object written, object sample) => (bool)canStack.Invoke(written, new[] { sample })!;
+
+    internal PaymentEdit? PlanShopDeposit(object player, object template, int total, object? cursor)
+    {
+        object inventory = Read(player, "Items")!;
+        int count = Math.Min((int)Read(player, "MaxItems")!, (int)Read(inventory, "Count")!);
+        var slots = Enumerable.Range(0, count).Select(slot => inventoryGet.Invoke(inventory, new object[] { slot })).ToArray();
+        if (cursor is not null && slots.Any(item => ReferenceEquals(item, cursor)))
+            return null;
+        if (total <= 0 || StackLimit(template) <= 0)
+            return null;
+
+        int remaining = total;
+        var edit = new PaymentEdit();
+        foreach (var index in Enumerable.Range(0, count).OrderBy(index => slots[index] is null))
+        {
+            if (remaining == 0)
+                break;
+            int slot = index;
+            if (slots[slot] is { } current)
+            {
+                if (!StacksWith(current, template))
+                    continue;
+                int old = StackSize(current);
+                int added = Math.Min(remaining, Math.Max(0, StackLimit(current) - old));
+                if (added == 0)
+                    continue;
+                edit.Add(() => WriteStack(current, old + added), () => WriteStack(current, old));
+                remaining -= added;
+            }
+            else
+            {
+                object stack = oneItem!.Invoke(template, null)!;
+                int added = Math.Min(remaining, StackLimit(stack));
+                WriteStack(stack, added);
+                edit.Add(() => SetSlot(inventory, slot, stack), () => SetSlot(inventory, slot, null));
+                remaining -= added;
+            }
+        }
+        return remaining == 0 ? edit : null;
+    }
     private readonly MethodInfo inventorySet;
     private readonly MethodInfo setStack;
     private readonly MethodInfo maxStack;

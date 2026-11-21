@@ -34,7 +34,7 @@ internal sealed record ActionReceipt(Guid Operation, long Actor, Guid Budget, Po
 internal sealed record BudgetBook(Guid Farm, int Day, Guid Revision, Guid LastCheckpoint, ImmutableDictionary<long, int> Personal,
     ImmutableDictionary<Guid, Budget> Accounts, ImmutableDictionary<Guid, Proposal> Proposals,
     ImmutableDictionary<Guid, Posting> Postings, ImmutableHashSet<Guid> UsedProposals,
-    ImmutableDictionary<long, int>? SavedWallets = null)
+    ImmutableDictionary<long, int>? SavedWallets = null, ImmutableDictionary<Guid, ShopOrder>? ShopOrders = null)
 {
     internal static BudgetBook Open(Guid farm, int day, IReadOnlyDictionary<long, int> balances)
     {

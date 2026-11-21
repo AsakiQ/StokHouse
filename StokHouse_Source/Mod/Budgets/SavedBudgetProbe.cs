@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Security.Cryptography;
+using System.Text.Json;
 using System.Xml;
 using System.Xml.Linq;
 
@@ -10,6 +11,7 @@ namespace StokHouse.FamilyBudget;
 internal static class SavedBudgetProbe
 {
     internal const string JournalKey = "StokHouse.CoopHousing/family-budget";
+    internal static string ShopReceiptKey(Guid id) => $"StokHouse.CoopHousing/shop/{id:N}";
 
     internal static string? Fingerprint(string path)
     {
@@ -23,11 +25,14 @@ internal static class SavedBudgetProbe
         catch (UnauthorizedAccessException) { return null; }
     }
 
-    internal static bool HasWallets(string file, ulong farmIdentity, IReadOnlyDictionary<long, int> expected)
+    internal static bool HasWallets(string file, ulong farmIdentity, IReadOnlyDictionary<long, int> expected,
+        IEnumerable<ShopOutcome>? expectedShop = null)
     {
-        if (expected.Count == 0)
+        var receipts = expectedShop?.ToLookup(outcome => outcome.Order.BuyerOrSeller);
+        if (expected.Count == 0 && (receipts?.Count ?? 0) == 0)
             return true;
         var reading = new Dictionary<long, int>();
+        int verifiedReceipts = 0;
         ulong? identity = null;
         try
         {
@@ -58,21 +63,27 @@ internal static class SavedBudgetProbe
                     farmhands = true;
                 else if ((xml.Depth == 1 && xml.Name == "player") || (farmhands && xml.Depth == 2 && xml.Name == "Farmer"))
                 {
-                    if (!ReadWallet(xml, out long farmer, out int balance) || !reading.TryAdd(farmer, balance))
+                    if (!ReadWallet(xml, receipts, out long farmer, out int balance, out int verified) ||
+                        !reading.TryAdd(farmer, balance))
                         return false;
+                    verifiedReceipts += verified;
                 }
             }
-            return identity == farmIdentity && expected.All(pair => reading.TryGetValue(pair.Key, out int balance) && balance == pair.Value);
+            return identity == farmIdentity && verifiedReceipts == (receipts?.Sum(group => group.Count()) ?? 0) &&
+                expected.All(pair => reading.TryGetValue(pair.Key, out int balance) && balance == pair.Value);
         }
         catch (IOException) { return false; }
         catch (UnauthorizedAccessException) { return false; }
         catch (XmlException) { return false; }
+        catch (JsonException) { return false; }
     }
 
-    private static bool ReadWallet(XmlReader xml, out long id, out int money)
+    private static bool ReadWallet(XmlReader xml, ILookup<long, ShopOutcome>? receipts, out long id, out int money, out int verified)
     {
         id = 0;
         money = -1;
+        verified = 0;
+        Dictionary<string, string>? data = null;
         using var farmer = xml.ReadSubtree();
         while (farmer.Read())
         {
@@ -84,6 +95,21 @@ internal static class SavedBudgetProbe
             if (farmer.Name == "money" && (money != -1 || !int.TryParse(ReadElement(farmer).Value,
                 NumberStyles.Integer, CultureInfo.InvariantCulture, out money)))
                 return false;
+            if (farmer.Name == "modData" && receipts is { Count: > 0 })
+            {
+                if (data is not null || !ReadModData(ReadElement(farmer), out data))
+                    return false;
+            }
+        }
+        if (receipts is not null)
+        {
+            foreach (var expected in receipts[id])
+            {
+                if (data?.GetValueOrDefault(ShopReceiptKey(expected.Order.Id)) is not { Length: > 0 and <= 4096 } raw ||
+                    JsonSerializer.Deserialize<ShopOutcome>(raw) != expected)
+                    return false;
+                verified++;
+            }
         }
         return id != 0 && money >= 0;
     }
@@ -154,23 +180,26 @@ internal static class SavedBudgetProbe
             if (found)
                 return false;
             found = true;
-            var data = ReadElement(host);
-            // NetDictionary exposes a serializable dictionary to XmlSerializer. Its XML
-            // is an item/key/value sequence inside the serializer's dictionary element.
-            var elements = data.Elements().ToArray();
-            if (elements.Length == 1 && elements[0].Name.LocalName == "SerializableDictionaryOfStringString")
-                elements = elements[0].Elements().ToArray();
-            foreach (var entry in elements)
-            {
-                if (entry.Name != "item" || entry.Element("key")?.Element("string") is not { } key ||
-                    entry.Element("value")?.Element("string") is not { } value)
-                    return false;
-                if (key.Value != JournalKey)
-                    continue;
-                if (journal is not null || string.IsNullOrEmpty(value.Value))
-                    return false;
-                journal = value.Value;
-            }
+            if (!ReadModData(ReadElement(host), out var data))
+                return false;
+            journal = data.GetValueOrDefault(JournalKey);
+            if (journal is { Length: 0 })
+                journal = null;
+        }
+        return true;
+    }
+
+    private static bool ReadModData(XElement parent, out Dictionary<string, string> data)
+    {
+        data = new Dictionary<string, string>(StringComparer.Ordinal);
+        var elements = parent.Elements().ToArray();
+        if (elements.Length == 1 && elements[0].Name.LocalName == "SerializableDictionaryOfStringString")
+            elements = elements[0].Elements().ToArray();
+        foreach (var entry in elements)
+        {
+            if (entry.Name != "item" || entry.Element("key")?.Element("string") is not { } key ||
+                entry.Element("value")?.Element("string") is not { } value || !data.TryAdd(key.Value, value.Value))
+                return false;
         }
         return true;
     }

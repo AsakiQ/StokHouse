@@ -107,9 +107,16 @@ internal sealed partial class GameApi
         Type modData = GameReflection.MemberType(Farmer, "modData");
         getModData = GameReflection.Method(modData, "TryGetValue", BindingFlags.Instance, typeof(string), typeof(string).MakeByRefType());
         setModData = GameReflection.Method(modData, "set_Item", BindingFlags.Instance, typeof(string), typeof(string));
+        if (ModEntry.BudgetBuildEnabled)
+        {
+            Shop = new GameShop(this, resolveType);
+            oneItem = GameReflection.Method(item, "getOne", BindingFlags.Instance);
+        }
     }
 
     internal static object? Read(object target, string name) => GameReflection.Read(target, name);
+
+    internal GameShop? Shop { get; }
 
     internal string Version => (string)Read(Game, "version")!;
     internal object Player => Read(Game, "player")!;

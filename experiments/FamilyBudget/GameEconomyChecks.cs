@@ -139,10 +139,10 @@ internal static class GameEconomyChecks
                 (_, receipt) =>
                 {
                     saved = receipt;
-                    if (receipt is not null)
+                    if (receipt?.State == PostingState.Applied)
                         throw new InvalidOperationException("The receipt write failed after storing the value.");
                 }, () => effect));
-            Check(units == 5 && saved is null && authorized.Book.Available(order.Account, 1) == 15_000);
+            Check(units == 5 && saved?.State == PostingState.Reversed && authorized.Book.Available(order.Account, 1) == 15_000);
         });
 
         test("the online and offline shipping paths share one persisted claim per farmer per day", () =>
