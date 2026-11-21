@@ -40,3 +40,9 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+
+# Generated Stok House packages and local build dependencies
+/.artifacts/
+/package/setup/
+/package/modpack.json
+/package/StokHouse-mod.zip

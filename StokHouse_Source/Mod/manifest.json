@@ -1,0 +1,10 @@
+{
+  "Name": "Stok House",
+  "Author": "Stok House",
+  "Version": "0.1.0-alpha",
+  "Description": "Домохозяйства, переезд и личная почта в кооперативе.",
+  "UniqueID": "StokHouse.CoopHousing",
+  "EntryDll": "StokHouse.dll",
+  "MinimumApiVersion": "4.5.2",
+  "UpdateKeys": []
+}
