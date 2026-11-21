@@ -13,12 +13,8 @@ files = {
     "StokHouse-mod.zip": package / "StokHouse-mod.zip",
     "modpack.json": package / "modpack.json",
 }
-sums = []
 for name, source in files.items():
     shutil.copyfile(source, output / name)
-    with source.open("rb") as stream:
-        sums.append(f"{hashlib.file_digest(stream, 'sha256').hexdigest()}  {name}\n")
-(output / "SHA256SUMS.txt").write_text("".join(sums), encoding="ascii")
 
 assets = root / "StokHouseSetup_Source/Setup/obj/project.assets.json"
 restore = json.loads(assets.read_text(encoding="utf-8"))
@@ -36,8 +32,10 @@ runtime_packages = {
     "microsoft.netcore.app.runtime.win-x64": ("LICENSE.TXT", "THIRD-PARTY-NOTICES.TXT"),
     "microsoft.windowsdesktop.app.runtime.win-x64": ("LICENSE",),
 }
-with ZipFile(output / "StokHouse-docs.zip", "w", compression=ZIP_DEFLATED) as docs:
-    for name in ("README.md", "docs/HOST.md", "docs/RECOVERY.md", "docs/TESTING.md"):
+docs_path = output / "StokHouse-docs.zip"
+with ZipFile(docs_path, "w", compression=ZIP_DEFLATED) as docs:
+    for name in ("README.md", "docs/HOST.md", "docs/RECOVERY.md", "docs/TESTING.md",
+                 "docs/RELEASES.md", "docs/WORK_BRIEF.md"):
         docs.write(root / name, name)
     for runtime, notices in runtime_packages.items():
         version = runtime_version(runtime)
@@ -47,3 +45,9 @@ with ZipFile(output / "StokHouse-docs.zip", "w", compression=ZIP_DEFLATED) as do
             if file is None:
                 raise FileNotFoundError(f"Missing notice for {runtime}: {name}")
             docs.write(file, f"licenses/{runtime}/{name}")
+
+sums = []
+for path in sorted([output / name for name in files] + [docs_path]):
+    with path.open("rb") as stream:
+        sums.append(f"{hashlib.file_digest(stream, 'sha256').hexdigest()}  {path.name}\n")
+(output / "SHA256SUMS.txt").write_text("".join(sums), encoding="ascii")

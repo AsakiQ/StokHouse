@@ -2,7 +2,7 @@ name: Build Stok House
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'release-candidate/v*']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -46,7 +46,10 @@ jobs:
           compression-level: 0
 
   draft-release:
-    if: github.event_name == 'workflow_dispatch' && inputs.draft_release && github.event.repository.private && github.ref == 'refs/heads/main'
+    if: >-
+      github.event.repository.private &&
+      ((github.event_name == 'workflow_dispatch' && inputs.draft_release && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release-candidate/v')))
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -78,6 +81,13 @@ jobs:
             throw 'The mod version cannot be used as a release tag.'
           }
           $tag = "v$($pack.modVersion)"
+          if ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF_NAME -cne "release-candidate/$tag") {
+            throw 'The release-candidate branch must match the mod version.'
+          }
+          $historyStatus = gh api "/repos/$env:GITHUB_REPOSITORY/compare/$($env:GITHUB_SHA)...main" --jq .status
+          if ($LASTEXITCODE -ne 0 -or $historyStatus -notin @('identical', 'ahead')) {
+            throw 'The candidate commit must be in main history.'
+          }
           $existing = gh api --paginate "/repos/$env:GITHUB_REPOSITORY/releases" --jq '.[].tag_name'
           if ($LASTEXITCODE -ne 0) { throw 'Cannot check existing releases.' }
           if ($existing -contains $tag) { throw "Release $tag already exists." }
