@@ -1,12 +1,10 @@
 using System.Text.Json;
 using StokHouse.Setup;
 
-if (args.Length != 2)
-    throw new ArgumentException("Pass the package directory and the original SMAPI 4.5.2 installer ZIP.");
+if (args.Length is < 2 or > 3)
+    throw new ArgumentException("Pass the package directory, SMAPI 4.5.2 installer ZIP, and optionally the 0.1.3-alpha rollback package.");
 var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-var pack = JsonSerializer.Deserialize<Modpack>(File.ReadAllText(Path.Combine(args[0], "modpack.json")), options)!;
-var payload = File.ReadAllBytes(Path.Combine(args[0], "StokHouse-mod.zip"));
-pack = pack with { GameVersion = Detection.VersionOf(typeof(Installer).Assembly.Location)! };
+var (pack, payload) = LoadPackage(args[0]);
 string root = Path.Combine(Path.GetTempPath(), "StokHouse-tests-" + Guid.NewGuid().ToString("N"));
 int passed = 0;
 try
@@ -76,6 +74,28 @@ try
     reopened.Backup.Recover();
     Check(reopened.Inspect(game).ModVerified && reopened.Backup.ReadPending() is null, "rollback after interrupted install");
 
+    if (args.Length == 3)
+    {
+        var (rollbackPack, rollbackPayload) = LoadPackage(args[2]);
+        Check(rollbackPack.ModVersion == "0.1.3-alpha", "exact rollback version");
+        var rollback = new Installer(app, saves, rollbackPack);
+        await rollback.Install(game, rollbackPayload, progress);
+        string originalFile = Path.Combine(target, "original-user-file.txt");
+        File.WriteAllText(originalFile, "preserve in backup");
+        var switchToPlaytest = await reopened.Install(game, payload, progress);
+        string snapshot = Path.Combine(switchToPlaytest.BackupRoot, "Game", "Mods", "StokHouse");
+        Check(reopened.Inspect(game).ModVerified &&
+            Disk.HashFile(Path.Combine(snapshot, "StokHouse.dll")) == rollbackPack.ModFiles["StokHouse.dll"] &&
+            File.ReadAllText(Path.Combine(snapshot, "original-user-file.txt")) == "preserve in backup" &&
+            File.ReadAllText(Path.Combine(switchToPlaytest.BackupRoot, "Saves", "TestFarm")) == "original save",
+            "experimental installer backs up the full 0.1.3-alpha mod and the saves");
+        await rollback.Install(game, rollbackPayload, progress);
+        Check(rollback.Inspect(game).ModVerified && !reopened.Inspect(game).ModVerified &&
+            File.ReadAllText(config) == """{"Capacity":3}""" &&
+            File.GetLastWriteTimeUtc(loader) == stable && File.ReadAllText(Path.Combine(saves, "TestFarm")) == "original save",
+            "restoring 0.1.3-alpha keeps settings, compatible SMAPI and the live saves");
+    }
+
     reopened.RemoveMod(game);
     Check(!Directory.Exists(target) && reopened.Inspect(game).SmapiReady &&
         File.Exists(Path.Combine(game, "Mods", "Unrelated", "manifest.json")) &&
@@ -89,6 +109,13 @@ finally
         Directory.Delete(root, true);
 }
 return;
+
+(Modpack Pack, byte[] Payload) LoadPackage(string directory)
+{
+    var manifest = JsonSerializer.Deserialize<Modpack>(File.ReadAllText(Path.Combine(directory, "modpack.json")), options)!;
+    return (manifest with { GameVersion = Detection.VersionOf(typeof(Installer).Assembly.Location)! },
+        File.ReadAllBytes(Path.Combine(directory, "StokHouse-mod.zip")));
+}
 
 void Check(bool condition, string name)
 {

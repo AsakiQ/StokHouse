@@ -51,8 +51,11 @@ public sealed partial class ModEntry
         var payment = CurrentPayment();
         if (payment is { Paused: false } && payment.Request.Guest == id && payment.Phase is PaymentPhase.Collect or PaymentPhase.Schedule)
             choices.Add(("cancel-upgrade", T("upgrade-cancel")));
-        if (BudgetOptIn)
-            choices.Add(("budget", T("budget-menu")));
+        if (BudgetBuildEnabled)
+        {
+            title += "^" + T(BudgetOptIn ? "budget-playtest-on" : "budget-playtest-off");
+            choices.Add(BudgetOptIn ? ("budget", T("budget-menu")) : ("budget-enable", T("budget-playtest-enable")));
+        }
         if (id == game.HostId)
             choices.Add(("reset", T("reset")));
 
@@ -63,6 +66,7 @@ public sealed partial class ModEntry
                 case "invite": ShowPlayers(); break;
                 case "rights": ShowRights(); break;
                 case "budget": ShowBudgetMenu(); break;
+                case "budget-enable": EnableBudgetPlaytest(); break;
                 case "leave": Confirm(T("leave-confirm"), yes => { if (yes) Submit("leave"); }); break;
                 case "inbox":
                     if (inbox.Values.OrderBy(item => item.Expires).FirstOrDefault() is { } invite)

@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>StokHouseFamilyBudget-Playtest-Setup</AssemblyName>
+    <Version>0.1.4-family-budget-playtest.1</Version>
+    <Product>Stok House Family Budget Playtest</Product>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Engine/StokHouse.Setup.Engine.csproj" />
+    <EmbeddedResource Include="$(PlaytestPayload)/StokHouse-mod.zip" LogicalName="playtest.zip" />
+    <EmbeddedResource Include="$(PlaytestPayload)/modpack.json" LogicalName="playtest.json" />
+    <EmbeddedResource Include="$(RollbackPackage)/StokHouse-mod.zip" LogicalName="stable.zip" />
+    <EmbeddedResource Include="$(RollbackPackage)/modpack.json" LogicalName="stable.json" />
+  </ItemGroup>
+</Project>

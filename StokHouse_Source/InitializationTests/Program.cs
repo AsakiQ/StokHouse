@@ -150,6 +150,27 @@ try
         Eq(true, warning!.Contains("config.json", StringComparison.Ordinal));
         Eq(invalid, File.ReadAllText(path));
     });
+
+    Test("playtest opt-in persists only for the selected farm and preserves existing settings", () =>
+    {
+        File.WriteAllText(path, """{"MenuKey":"K","ConfigVersion":1,"familyBudgetPlaytest":false,"Other":"keep"}""");
+        Eq(false, LoadConfig(path).IsPlaytestFarm(123));
+        Eq(true, ModConfig.EnablePlaytest(path, 123, message => throw new Exception(message)));
+        var config = LoadConfig(path);
+        Eq(true, config.IsPlaytestFarm(123));
+        Eq(false, config.IsPlaytestFarm(456));
+        Eq(false, config.IsPlaytestFarm(0));
+        Eq(SButton.K, config.MenuKey);
+        Eq("keep", JsonNode.Parse(File.ReadAllText(path))!["Other"]!.GetValue<string>());
+    });
+
+    Test("playtest opt-in leaves a damaged config intact", () =>
+    {
+        const string invalid = "{...";
+        File.WriteAllText(path, invalid);
+        Eq(false, ModConfig.EnablePlaytest(path, 123, _ => {}));
+        Eq(invalid, File.ReadAllText(path));
+    });
 }
 finally
 {

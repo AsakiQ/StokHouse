@@ -32,6 +32,8 @@ public sealed partial class ModEntry : Mod
     private int ticksBeforeSync;
     private int ticksBeforeWarp;
 
+    private string ConfigPath => Path.Combine(Helper.DirectoryPath, "config.json");
+
     public override void Entry(IModHelper helper)
     {
         config = ModConfig.Load(Path.Combine(helper.DirectoryPath, "config.json"),
@@ -229,7 +231,8 @@ public sealed partial class ModEntry : Mod
 
     private void OnButton(object? sender, ButtonPressedEventArgs args)
     {
-        if (!active || !Context.CanPlayerMove || Context.ScreenId != 0 || args.Button != config.MenuKey)
+        if (!active || !Context.CanPlayerMove || Context.ScreenId != 0 ||
+            (args.Button != config.MenuKey && !(BudgetBuildEnabled && args.Button == SButton.O)))
             return;
         Helper.Input.Suppress(args.Button);
         if (Running)

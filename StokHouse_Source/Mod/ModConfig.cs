@@ -17,8 +17,11 @@ internal sealed class ModConfig
 
     public SButton MenuKey { get; set; } = SButton.O;
     public bool FamilyBudgetPlaytest { get; set; }
+    public ulong FamilyBudgetFarm { get; set; }
     public int Capacity { get; set; } = 2;
     public int ConfigVersion { get; set; }
+
+    internal bool IsPlaytestFarm(ulong farm) => FamilyBudgetPlaytest && farm != 0 && farm == FamilyBudgetFarm;
 
     internal static ModConfig Load(string path, Action<string> info, Action<string> warn)
     {
@@ -31,10 +34,7 @@ internal sealed class ModConfig
 
         try
         {
-            var document = JsonNode.Parse(File.ReadAllText(path),
-                new JsonNodeOptions { PropertyNameCaseInsensitive = true },
-                new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip })
-                as JsonObject ?? throw new JsonException("Expected a JSON object.");
+            var document = ReadDocument(path);
             var config = document.Deserialize<ModConfig>(Format) ?? throw new JsonException("Empty configuration.");
             if (config.ConfigVersion >= CurrentVersion)
                 return config;
@@ -59,6 +59,31 @@ internal sealed class ModConfig
             return new ModConfig();
         }
     }
+
+    internal static bool EnablePlaytest(string path, ulong farm, Action<string> warn)
+    {
+        if (farm == 0)
+            return false;
+
+        try
+        {
+            var document = File.Exists(path) ? ReadDocument(path) : new JsonObject();
+            _ = document.Deserialize<ModConfig>(Format);
+            SetValue(document, nameof(FamilyBudgetPlaytest), true);
+            SetValue(document, nameof(FamilyBudgetFarm), farm);
+            return TryWrite(path, document.ToJsonString(Format), overwrite: true, warn);
+        }
+        catch (Exception ex) when (ex is JsonException or ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            warn($"Could not enable the family budget playtest. {ex.Message}");
+            return false;
+        }
+    }
+
+    private static JsonObject ReadDocument(string path) =>
+        JsonNode.Parse(File.ReadAllText(path), new JsonNodeOptions { PropertyNameCaseInsensitive = true },
+            new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip })
+        as JsonObject ?? throw new JsonException("Expected a JSON object.");
 
     private static void SetValue(JsonObject document, string name, JsonNode? value)
     {

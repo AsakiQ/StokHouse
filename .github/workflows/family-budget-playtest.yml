@@ -1,0 +1,102 @@
+name: Package the private family budget playtest
+
+on:
+  push:
+    branches: ['feature/family-budget']
+    paths:
+      - 'build-playtest.ps1'
+      - 'StokHouseSetup_Source/Playtest/**'
+      - 'StokHouseSetup_Source/Tests/**'
+      - 'StokHouse_Source/**'
+      - 'docs/FAMILY_BUDGET_PLAYTEST.md'
+      - '.github/workflows/family-budget-playtest.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    if: github.event.repository.private
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: |
+            8.0.419
+            6.0.428
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Build the fixed 0.1.3-alpha rollback package
+        shell: pwsh
+        run: |
+          $stable = Join-Path $env:RUNNER_TEMP 'stokhouse-0.1.3-alpha'
+          git worktree add --detach $stable 9842b631be7cc60274bbe7649f52a1cb7aef8ea4
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & (Join-Path $stable 'build.ps1') -SkipSetup
+      - name: Test and publish the experimental Windows executable
+        shell: pwsh
+        run: |
+          $stable = Join-Path $env:RUNNER_TEMP 'stokhouse-0.1.3-alpha'
+          $smapi = Join-Path $stable '.artifacts/smapi-windows'
+          ./build-playtest.ps1 -SmapiPath $smapi -RollbackPackage (Join-Path $stable 'package')
+          dotnet build StokHouse_Source/InitializationTests -c Release "-p:SmapiPath=$smapi" -p:FamilyBudgetPlaytest=true -m:1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet run --no-build -c Release --project StokHouse_Source/InitializationTests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet run -c Release --project experiments/FamilyBudget
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet run -c Release --project StokHouseSetup_Source/Tests -- .artifacts/family-budget-playtest/payload (Join-Path $stable '.artifacts/SMAPI-4.5.2-installer.zip') (Join-Path $stable 'package')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $out = '.artifacts/family-budget-playtest/distribution'
+          New-Item -ItemType Directory -Force $out | Out-Null
+          $exe = 'StokHouseFamilyBudget-Playtest-Setup.exe'
+          Copy-Item ".artifacts/family-budget-playtest/setup/$exe" $out
+          Copy-Item docs/FAMILY_BUDGET_PLAYTEST.md "$out/Playtest-RU.md"
+          $hash = (Get-FileHash -LiteralPath "$out/$exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $exe" | Set-Content -LiteralPath "$out/SHA256SUMS.txt" -Encoding ascii
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: StokHouse-FamilyBudget-Playtest-Windows-x64
+          path: .artifacts/family-budget-playtest/distribution/*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  draft:
+    if: github.event.repository.private
+    needs: windows
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    permissions:
+      contents: write
+    concurrency:
+      group: stokhouse-family-budget-draft
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: StokHouse-FamilyBudget-Playtest-Windows-x64
+          path: playtest
+      - name: Attach the files to a private test draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_PROMPT_DISABLED: '1'
+        run: |
+          test "$GITHUB_REF" = 'refs/heads/feature/family-budget'
+          test "$(gh api "/repos/$GITHUB_REPOSITORY" --jq .visibility)" = private
+          tag='family-budget-playtest-0.1.4.1'
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo 'The test draft already exists. This run has its own Windows artifact.'
+            exit 0
+          fi
+          (cd playtest && sha256sum -c SHA256SUMS.txt)
+          gh release create "$tag" playtest/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --draft --prerelease --title 'Stok House — тест семейных бюджетов 0.1.4.1' \
+            --notes-file playtest/Playtest-RU.md

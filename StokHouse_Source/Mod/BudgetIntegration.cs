@@ -13,7 +13,7 @@ public sealed partial class ModEntry
 #else
     internal static bool BudgetBuildEnabled => false;
 #endif
-    private bool BudgetOptIn => BudgetBuildEnabled && config.FamilyBudgetPlaytest;
+    private bool BudgetOptIn => BudgetBuildEnabled && game is not null && config.IsPlaytestFarm(game.FarmIdentity);
     private BudgetSession? budgetSession;
     private BudgetFrame? localBudget;
     private readonly HashSet<long> budgetPeers = new();
@@ -320,5 +320,25 @@ public sealed partial class ModEntry
             choices.Add((action, T(action)));
         }
         Ask(title, choices, action => Submit(action, request: view.Proposal?.Id ?? Guid.Empty));
+    }
+
+    private void EnableBudgetPlaytest()
+    {
+        if (!BudgetBuildEnabled || BudgetOptIn)
+            return;
+        if (!BudgetSeparate())
+        {
+            Tell("budget-playtest-separate");
+            return;
+        }
+
+        Confirm(T("budget-playtest-confirm"), yes =>
+        {
+            if (!yes)
+                return;
+            bool saved = ModConfig.EnablePlaytest(ConfigPath, game!.FarmIdentity,
+                message => Monitor.Log(message, LogLevel.Warn));
+            Tell(saved ? "budget-playtest-restart" : "budget-playtest-config-error");
+        });
     }
 }
