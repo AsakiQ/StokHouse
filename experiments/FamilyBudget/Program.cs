@@ -276,6 +276,7 @@ Test("the engine audit indexes direct calls and fields without loading the scann
 
 HostChecks.Run(Test);
 GameEconomyChecks.Run(Test);
+SaveProbeChecks.Run(Test);
 Console.WriteLine($"Family budget model, save coordination and audit checks passed: {passed}.");
 
 void Test(string name, Action run)
