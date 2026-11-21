@@ -34,7 +34,7 @@ internal sealed record UpgradePayment(UpgradeRequest Request, bool OwnerApproved
         if (payer?.Kind == ReceiptKind.NeedsReview || owner?.Kind == ReceiptKind.NeedsReview)
             return new(this with { Paused = true });
 
-        int price = GameApi.Price(Request.Level).Gold;
+        int price = UpgradeCosts.ForLevel(Request.Level).Gold;
         return Phase switch
         {
             PaymentPhase.Collect when invalid is not null || payer?.Kind == ReceiptKind.Refused =>

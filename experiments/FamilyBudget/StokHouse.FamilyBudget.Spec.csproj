@@ -8,4 +8,9 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <CheckEolTargetFramework>false</CheckEolTargetFramework>
   </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../StokHouse_Source/Core/StokHouse.Core.csproj" />
+    <Compile Include="../../StokHouse_Source/Mod/UpgradeCosts.cs" Link="Game/UpgradeCosts.cs" />
+    <Compile Include="../../StokHouse_Source/Mod/UpgradePayment.cs" Link="Game/UpgradePayment.cs" />
+  </ItemGroup>
 </Project>

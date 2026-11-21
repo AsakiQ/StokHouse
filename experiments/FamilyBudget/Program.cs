@@ -13,9 +13,15 @@ if (args.Length != 0)
             Console.WriteLine(signature);
         return;
     }
-    if (args is not ["--audit", { } path])
-        throw new ArgumentException("Usage: --audit|--contract|--verify-contract <path to Stardew Valley.dll>");
+    if (args is not ["--audit" or "--verify-audit", { } path])
+        throw new ArgumentException("Usage: --audit|--verify-audit|--contract|--verify-contract <path to Stardew Valley.dll>");
     var entries = MoneyAudit.Read(path);
+    if (args[0] == "--verify-audit")
+    {
+        MoneyAudit.VerifyGameContract(MoneyAudit.Describe(path));
+        MoneyAudit.VerifyMoneyPaths(entries);
+    }
+
     if (entries.Count == 0)
         throw new InvalidDataException("No known Stardew Valley money paths were found in this assembly.");
     Console.WriteLine("Caller\tIL offset\tMoney member");
@@ -269,6 +275,7 @@ Test("the engine audit indexes direct calls and fields without loading the scann
 });
 
 HostChecks.Run(Test);
+GameEconomyChecks.Run(Test);
 Console.WriteLine($"Family budget model, save coordination and audit checks passed: {passed}.");
 
 void Test(string name, Action run)

@@ -128,6 +128,32 @@ internal static class MoneyAudit
         }
     }
 
+    internal static void VerifyMoneyPaths(IReadOnlyList<Site> sites)
+    {
+        Require("StardewValley.Menus.ShopMenu.tryToPurchaseItem", "StardewValley.Menus.ShopMenu.chargePlayer", 2);
+        Require("StardewValley.Menus.ShopMenu.receiveLeftClick", "StardewValley.Menus.ShopMenu.chargePlayer", 1);
+        Require("StardewValley.Menus.ShopMenu.receiveRightClick", "StardewValley.Menus.ShopMenu.chargePlayer", 1);
+        Require("StardewValley.GameLocation.houseUpgradeAccept", "StardewValley.Farmer.set_Money", 3);
+
+        // Iterator method names can change whenever the game recompiles. Keep both actual
+        // charge paths associated with the native new-day coroutine in the audit.
+        string[] nightly = sites.Where(site =>
+                site.Caller.StartsWith("StardewValley.Game1+<_newDayAfterFade>", StringComparison.Ordinal) &&
+                site.Caller.EndsWith(".MoveNext", StringComparison.Ordinal))
+            .Select(site => site.Caller).Distinct(StringComparer.Ordinal).ToArray();
+        if (nightly.Length != 1)
+            throw new InvalidDataException("Could not identify the new-day coroutine handling shipping credits.");
+        Require(nightly[0], "StardewValley.Farmer.set_Money", 1);
+        Require(nightly[0], "StardewValley.FarmerTeam.AddIndividualMoney", 1);
+
+        void Require(string caller, string target, int count)
+        {
+            int actual = sites.Count(site => site.Caller == caller && site.Target == target);
+            if (actual != count)
+                throw new InvalidDataException($"Expected {count} {target} call(s) in {caller}, found {actual}.");
+        }
+    }
+
     private static string Member(MetadataReader metadata, EntityHandle type, StringHandle name) =>
         TypeName(metadata, type) + "." + metadata.GetString(name);
 

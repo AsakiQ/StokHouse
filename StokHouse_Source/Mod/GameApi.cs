@@ -196,13 +196,7 @@ internal sealed partial class GameApi
         return null;
     }
 
-    internal static (int Gold, string? Item, int Quantity) Price(int level) => level switch
-    {
-        0 => (10_000, "(O)388", 450),
-        1 => (65_000, "(O)709", 100),
-        2 => (100_000, null, 0),
-        _ => throw new ArgumentOutOfRangeException(nameof(level))
-    };
+    internal static (int Gold, string? Item, int Quantity) Price(int level) => UpgradeCosts.ForLevel(level);
 
     internal string? Load(string key) => Load(Master, key);
 

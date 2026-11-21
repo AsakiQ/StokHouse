@@ -4,6 +4,7 @@ on:
   push:
     branches: ['feature/family-budget']
     paths:
+      - 'StokHouse_Source/**'
       - 'experiments/FamilyBudget/**'
       - '.github/workflows/family-budget-check.yml'
 
@@ -23,6 +24,12 @@ jobs:
           dotnet-version: |
             8.0.419
             6.0.428
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Build and test the existing mod and installer on Windows
+        shell: pwsh
+        run: ./build.ps1 -Test
       - name: Run the model and save-coordination tests
         shell: pwsh
         run: dotnet run -c Release --project experiments/FamilyBudget
