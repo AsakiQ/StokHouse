@@ -1,4 +1,5 @@
 // Only the signatures used by Stok House. These types do not implement the game.
+using System.Runtime.CompilerServices;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewValley.Buildings;
@@ -11,16 +12,24 @@ namespace StardewValley
         public static readonly string version = "1.6.15";
         public static readonly GameLocation currentLocation = new();
         public static readonly Farmer MasterPlayer = new();
+        public static Farmer player => MasterPlayer;
+        public static bool RobinBusy { get; set; }
+        public static Response[] LastChoices { get; private set; } = Array.Empty<Response>();
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static void drawObjectQuestionDialogue(string message, Response[] responses) => LastChoices = responses;
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static void drawObjectQuestionDialogue(string message, Response[] responses, int width) => LastChoices = responses;
 
         public static Farm getFarm() => new();
         public static T? getFarm<T>() where T : Farm => null;
-        public static IEnumerable<Farmer> getAllFarmers() => Array.Empty<Farmer>();
+        public static IEnumerable<Farmer> getAllFarmers() => new[] { MasterPlayer };
         public static IEnumerable<Farmer> getOnlineFarmers() => Array.Empty<Farmer>();
         public static NPC getCharacterFromName(string name, bool mustBeVillager = true, bool includeEventActors = false) => new(name);
         public static T? getCharacterFromName<T>(string name, bool mustBeVillager = true, bool includeEventActors = false) where T : NPC => null;
         public static void warpFarmer(string location, int x, int y, int direction, bool structure) { }
         public static void showGlobalMessage(string text) { }
-        public static bool IsThereABuildingUnderConstruction(string builder) => false;
+        public static bool IsThereABuildingUnderConstruction(string builder) => RobinBusy;
     }
 
     public class Character
@@ -31,13 +40,22 @@ namespace StardewValley
     public class Farmer : Character
     {
         public TestInventory Items { get; } = new();
+        public int HouseUpgradeLevel { get; set; }
+        public Counter daysUntilHouseUpgrade { get; } = new() { Value = -1 };
+        public int Money { get; set; }
         public Point getMailboxPosition() => Point.Zero;
+    }
+
+    public class Counter
+    {
+        public int Value { get; set; }
     }
 
     public class TestInventory
     {
-        public bool ContainsId(string item) => false;
-        public bool ContainsId(string item, int quantity) => false;
+        public int Wood { get; set; }
+        public bool ContainsId(string item) => ContainsId(item, 1);
+        public bool ContainsId(string item, int quantity) => item == "(O)388" && Wood >= quantity;
     }
 
     public class NPC
@@ -48,22 +66,50 @@ namespace StardewValley
 
     public class Response
     {
-        public Response(string key, string text) => responseKey = key;
+        public Response(string key, string text) { responseKey = key; responseText = text; }
         public string responseKey;
+        public string responseText;
     }
 
     public class GameLocation
     {
         public delegate void afterQuestionBehavior(Farmer farmer, string answer);
         public afterQuestionBehavior? callback;
+        public string? lastQuestionKey;
+        public string? LastNativeAnswer;
+        public int NativePurchases;
         public bool destroyStructure(Building building) => true;
         public bool performAction(string action, Farmer who, xTile.Dimensions.Location tile) => false;
         public bool performAction(string[] action, Farmer who, xTile.Dimensions.Location tile) => true;
-        public void createQuestionDialogue(string title, Response[] options, string dialogKey) { }
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public void createQuestionDialogue(string title, Response[] options, string dialogKey)
+        {
+            lastQuestionKey = dialogKey;
+            Game1.drawObjectQuestionDialogue(title, options);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public void createQuestionDialogue(string title, Response[] options, string dialogKey, object action)
+        {
+            lastQuestionKey = dialogKey;
+            Game1.drawObjectQuestionDialogue(title, options, 1200);
+        }
         public void createQuestionDialogue(string title, Response[] options, afterQuestionBehavior onReply, NPC? who) => callback = onReply;
-        public bool answerDialogueAction(string answer, string[] arguments) => true;
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public bool answerDialogueAction(string answer, string[] arguments)
+        {
+            LastNativeAnswer = answer;
+            return true;
+        }
         public void mailbox() { }
-        private void houseUpgradeAccept() { }
+
+        private void houseUpgradeAccept()
+        {
+            NativePurchases++;
+            Game1.player.daysUntilHouseUpgrade.Value = 3;
+            Game1.player.Money -= 10_000;
+            Game1.player.Items.Wood -= 450;
+        }
     }
 
     public class Farm : GameLocation

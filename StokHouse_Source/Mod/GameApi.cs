@@ -162,26 +162,34 @@ internal sealed class GameApi
 
     internal bool IsAtRobin(object farmer)
     {
-        object? robin = Robin;
-        return robin is not null && Read(robin, "currentLocation") is { } shop &&
-               LocationName(shop) == "ScienceHouse" &&
-               Read(farmer, "currentLocation") is { } here && LocationName(here) == "ScienceHouse" &&
-               Vector2.Distance((Vector2)Read(robin, "Tile")!, FarmerTile(farmer)) <= 5;
+        object? shop = ReferenceEquals(farmer, Player) ? Current : Read(farmer, "currentLocation");
+        if (shop is null || LocationName(shop) != "ScienceHouse")
+            return false;
+        var robin = ((IEnumerable)Read(shop, "characters")!).Cast<object>()
+            .FirstOrDefault(npc => Equals(Read(npc, "Name"), "Robin"));
+        return robin is not null && Vector2.Distance((Vector2)Read(robin, "Tile")!, FarmerTile(farmer)) <= 5;
     }
 
-    internal bool CanStartUpgrade(object farmer, int expectedLevel)
+    internal string? UpgradeBlock(object farmer, int expectedLevel)
     {
-        if (Level(farmer) != expectedLevel || expectedLevel is < 0 or > 2 || UpgradeDays(farmer) >= 0 ||
-            (bool)construction.Invoke(null, new object[] { "Robin" })! || Farmers().Any(f => UpgradeDays(f) > 0))
-            return false;
-        return true;
+        if (expectedLevel is < 0 or > 2)
+            return "upgrade-max";
+        if (Level(farmer) != expectedLevel)
+            return "upgrade-quote-changed";
+        if (UpgradeDays(farmer) >= 0 || Farmers().Any(f => UpgradeDays(f) > 0))
+            return "upgrade-in-progress";
+        if ((bool)construction.Invoke(null, new object[] { "Robin" })!)
+            return "robin-busy";
+        return null;
     }
 
     internal string StartNativeUpgrade(int level)
     {
         object player = Player;
-        if (!CanStartUpgrade(player, level) || Robin is null)
-            return "upgrade-unavailable";
+        if (UpgradeBlock(player, level) is { } blocked)
+            return blocked;
+        if (Robin is null)
+            return "robin-unavailable";
 
         // Check before calling Robin so the mod can give the initiator a useful result.
         var (price, item, quantity) = Price(level);
@@ -223,23 +231,25 @@ internal sealed class GameApi
 
     internal void Hud(string message) => hud.Invoke(null, new object[] { message });
 
-    internal Array AppendResponse(Array source, string key, string text, params string[] remove)
+    internal static string ResponseKey(object response) => (string)Read(response, "responseKey")!;
+
+    internal Array WithSharedUpgrade(Array source, string text)
     {
-        object[] kept = source.Cast<object>().Where(response => !remove.Contains((string)Read(response, "responseKey")!)).ToArray();
-        Array copy = Array.CreateInstance(Response, kept.Length + 1);
-        int index = 0;
-        bool inserted = false;
-        foreach (object response in kept)
+        var choices = source.Cast<object>().ToList();
+        if (choices.Any(response => ResponseKey(response) == RobinDialogue.Choice))
+            return source;
+
+        object shared = createResponse.Invoke(new[] { RobinDialogue.Choice, text });
+        int upgrade = choices.FindIndex(response => ResponseKey(response) == "Upgrade");
+        if (upgrade >= 0)
+            choices[upgrade] = shared;
+        else
         {
-            if (!inserted && (string)Read(response, "responseKey")! == "Leave")
-            {
-                copy.SetValue(createResponse.Invoke(new[] { key, text }), index++);
-                inserted = true;
-            }
-            copy.SetValue(response, index++);
+            int leave = choices.FindIndex(response => ResponseKey(response) == "Leave");
+            choices.Insert(leave < 0 ? choices.Count : leave, shared);
         }
-        if (!inserted)
-            copy.SetValue(createResponse.Invoke(new[] { key, text }), index);
+        var copy = Array.CreateInstance(Response, choices.Count);
+        choices.CopyTo((object[])copy, 0);
         return copy;
     }
 

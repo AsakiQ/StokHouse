@@ -16,7 +16,7 @@ public sealed partial class ModEntry : Mod
     private readonly Dictionary<Guid, Invitation> outbox = new();
     private readonly Dictionary<Guid, UpgradeRequest> offers = new();
     private readonly Dictionary<Guid, UpgradeRequest> granted = new();
-    private readonly Dictionary<Guid, (string Code, DateTimeOffset Expires)> completedLocally = new();
+    private readonly UpgradeReceipts completedLocally = new();
     private readonly Queue<Action> dialogs = new();
     private GameApi? game;
     private ModConfig config = new();
@@ -144,7 +144,7 @@ public sealed partial class ModEntry : Mod
             RemoveExpired(outbox, item => item.Expires, now);
             RemoveExpired(offers, item => item.Expires, now);
             RemoveExpired(granted, item => item.Expires, now);
-            RemoveExpired(completedLocally, item => item.Expires, now);
+            completedLocally.Expire(now);
             foreach (var id in seen.Where(item => item.Value < now).Select(item => item.Key).ToArray())
                 seen.Remove(id);
         }
@@ -247,9 +247,9 @@ public sealed partial class ModEntry : Mod
         Helper.Multiplayer.SendMessage(payload, Protocol + type, new[] { ModManifest.UniqueID },
             target.HasValue ? new[] { target.Value } : null);
 
-    private void Submit(string action, long player = 0, Guid request = default, HouseRules? rules = null)
+    private void Submit(string action, long player = 0, Guid request = default, HouseRules? rules = null, int? upgradeLevel = null)
     {
-        var command = new Command(Guid.NewGuid(), action, player, request, rules);
+        var command = new Command(Guid.NewGuid(), action, player, request, rules, upgradeLevel);
         if (Context.IsMainPlayer)
             HandleCommand(game!.LocalId, command);
         else
@@ -283,7 +283,7 @@ public sealed partial class ModEntry : Mod
                 case "invitation": ReceiveInvitation(args.ReadAs<Invitation>()); break;
                 case "invitation-out": RememberOutgoing(args.ReadAs<Invitation>()); break;
                 case "upgrade": ReceiveUpgrade(args.ReadAs<UpgradeRequest>()); break;
-                case "upgrade-run": ReceiveGrant(args.ReadAs<UpgradeRequest>()); break;
+                case "upgrade-run": ReceiveGrant(args.ReadAs<UpgradeGrant>()); break;
             }
         }
         catch (Exception ex)
@@ -427,7 +427,7 @@ public sealed partial class ModEntry : Mod
                 result = new("reset-done", true);
                 break;
             case "upgrade":
-                RequestUpgrade(actor, now);
+                RequestUpgrade(actor, command.Player, command.UpgradeLevel, now);
                 return;
             case "upgrade-accept":
             case "upgrade-decline":

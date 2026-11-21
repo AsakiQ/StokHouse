@@ -1,7 +1,9 @@
 using System.Reflection;
+using System.Reflection.Emit;
 using HarmonyLib;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using StardewModdingAPI;
 
 namespace StokHouse;
 
@@ -9,6 +11,8 @@ public sealed partial class ModEntry
 {
     internal static class GamePatches
     {
+        internal enum PatchKind { Prefix, Postfix, Transpiler }
+
         private static ModEntry mod = null!;
         private static GameApi game = null!;
 
@@ -19,12 +23,14 @@ public sealed partial class ModEntry
 
             // Resolve every target before changing any game method.
             var patches = Resolve(api);
-            foreach (var (original, handler, postfix) in patches)
+            foreach (var (original, handler, kind) in patches)
             {
                 var patch = new HarmonyMethod(handler);
                 try
                 {
-                    harmony.Patch(original, prefix: postfix ? null : patch, postfix: postfix ? patch : null);
+                    harmony.Patch(original, prefix: kind == PatchKind.Prefix ? patch : null,
+                        postfix: kind == PatchKind.Postfix ? patch : null,
+                        transpiler: kind == PatchKind.Transpiler ? patch : null);
                 }
                 catch (Exception ex)
                 {
@@ -34,9 +40,9 @@ public sealed partial class ModEntry
             return patches.Count;
         }
 
-        internal static IReadOnlyList<(MethodInfo Original, MethodInfo Handler, bool Postfix)> Resolve(GameApi api)
+        internal static IReadOnlyList<(MethodInfo Original, MethodInfo Handler, PatchKind Kind)> Resolve(GameApi api)
         {
-            var patches = new List<(MethodInfo, MethodInfo, bool)>();
+            var patches = new List<(MethodInfo, MethodInfo, PatchKind)>();
             Patch(api.Building, "draw", DrawCabin, false, typeof(SpriteBatch));
             Patch(api.Building, "drawBackground", DrawCabin, false, typeof(SpriteBatch));
             Patch(api.Building, "drawShadow", DrawCabin, false, typeof(SpriteBatch), typeof(int), typeof(int));
@@ -50,8 +56,9 @@ public sealed partial class ModEntry
             Patch(api.Location, "destroyStructure", ProtectDemolition, false, api.Building);
             Patch(api.Farmer, "getMailboxPosition", MailIndicator, postfix: true);
             Patch(api.Location, "performAction", MailAction, false, typeof(string[]), api.Farmer, api.Tile);
-            Patch(api.Location, "createQuestionDialogue", RobinChoices, false,
-                typeof(string), api.Response.MakeArrayType(), typeof(string));
+            Type choices = api.Response.MakeArrayType();
+            PatchQuestionRenderer(typeof(string), choices);
+            PatchQuestionRenderer(typeof(string), choices, typeof(int));
             Patch(api.Location, "answerDialogueAction", RobinAnswer, false, typeof(string), typeof(string[]));
             Patch(api.Furniture, "canBeRemoved", FurnitureRemove, false, api.Farmer);
             Patch(api.Bed, "canBeRemoved", FurnitureRemove, false, api.Farmer);
@@ -67,7 +74,15 @@ public sealed partial class ModEntry
             {
                 var original = GameReflection.Method(type, method,
                     BindingFlags.Instance | BindingFlags.DeclaredOnly, parameters);
-                patches.Add((original, handler.Method, postfix));
+                patches.Add((original, handler.Method, postfix ? PatchKind.Postfix : PatchKind.Prefix));
+            }
+
+            void PatchQuestionRenderer(params Type[] parameters)
+            {
+                var original = GameReflection.Method(api.Game, "drawObjectQuestionDialogue",
+                    BindingFlags.Static | BindingFlags.DeclaredOnly, parameters);
+                patches.Add((original, ((Func<IEnumerable<CodeInstruction>, MethodBase, IEnumerable<CodeInstruction>>)RobinChoiceArgument).Method,
+                    PatchKind.Transpiler));
             }
         }
 
@@ -136,24 +151,74 @@ public sealed partial class ModEntry
             return true;
         }
 
-        private static bool RobinChoices(object[] __args)
+        private static IEnumerable<CodeInstruction> RobinChoiceArgument(IEnumerable<CodeInstruction> instructions,
+            MethodBase __originalMethod)
         {
-            if (!mod.Running || (string)__args[2] != "carpenter" || !mod.households.IsGuest(game.LocalId))
-                return true;
-            __args[1] = game.AppendResponse((Array)__args[1], "StokHouseUpgrade", mod.T("robin-choice"), "Upgrade", "Renovate");
-            return true;
+            // Harmony 2.2.2 doesn't write a replacement reference from __args back to this by-value argument.
+            var edit = ((Func<Array, Array>)RobinChoices).Method;
+            foreach (var instruction in ReplaceChoiceArgument(__originalMethod, edit))
+                yield return instruction;
+            foreach (var instruction in instructions)
+                yield return instruction;
         }
 
-        private static bool RobinAnswer(string __0, ref bool __result)
+        internal static IEnumerable<CodeInstruction> ReplaceChoiceArgument(MethodBase renderer, MethodInfo edit)
         {
-            if (!mod.Running || !mod.households.IsGuest(game.LocalId))
+            yield return new(OpCodes.Ldarg_1);
+            yield return new(OpCodes.Call, edit);
+            yield return new(OpCodes.Castclass, renderer.GetParameters()[1].ParameterType);
+            yield return new(OpCodes.Starg_S, (byte)1);
+        }
+
+        private static Array RobinChoices(Array choices)
+        {
+            if (!mod.Running)
+                return choices;
+            try
+            {
+                if (game.Current is not { } location || !mod.households.IsGuest(game.LocalId) ||
+                    !Equals(GameApi.Read(location, "lastQuestionKey"), "carpenter"))
+                    return choices;
+                var keys = choices.Cast<object>().Select(GameApi.ResponseKey).ToArray();
+                if (!keys.Contains("Shop") || !keys.Contains("Construct"))
+                    return choices;
+
+                var quote = mod.GetRobinQuote(location, out string? refusal);
+                mod.LogRobin($"menu [{string.Join(", ", keys)}] player={game.LocalId} " +
+                    (quote is not null ? $"shared owner={quote.Owner} level={quote.Level}" : $"vanilla reason={refusal}"));
+                return quote is null ? choices : game.WithSharedUpgrade(choices, mod.T("robin-choice"));
+            }
+            catch (Exception ex)
+            {
+                mod.Monitor.Log($"Stok House left Robin's menu unchanged after an error: {ex}", LogLevel.Error);
+                return choices;
+            }
+        }
+
+        private static bool RobinAnswer(object __instance, string __0, ref bool __result)
+        {
+            if (!RobinDialogue.IsUpgradeAnswer(__0))
                 return true;
-            if (__0 is not ("carpenter_StokHouseUpgrade" or "carpenter_Upgrade" or "carpenter_Renovate" or "upgrade_Yes"))
-                return true;
-            if (__0 == "carpenter_StokHouseUpgrade")
-                mod.dialogs.Enqueue(() => mod.ShowRobinQuote());
-            __result = true;
-            return false;
+
+            RobinQuote? quote = null;
+            string? refusal;
+            try
+            {
+                quote = mod.GetRobinQuote(__instance, out refusal);
+            }
+            catch (Exception ex)
+            {
+                refusal = "upgrade-error";
+                mod.Monitor.Log($"Stok House could not check Robin's answer {__0}: {ex}", LogLevel.Error);
+            }
+
+            bool handled = RobinDialogue.TryHandle(__0, refusal,
+                () => mod.dialogs.Enqueue(() => mod.ShowRobinQuote(quote!)), code => mod.Tell(code));
+            mod.LogRobin($"answer {__0}; route={(handled ? quote is null ? "feedback" : "shared quote" : "vanilla")}; " +
+                $"reason={refusal ?? "available"}");
+            if (handled)
+                __result = true;
+            return !handled;
         }
 
         private static bool CanDecorate(object location, object farmer, out bool delegated)
@@ -197,25 +262,68 @@ public sealed partial class ModEntry
         }
     }
 
-    private void ShowRobinQuote()
+    private sealed record RobinQuote(long Owner, int Level);
+
+    private RobinQuote? GetRobinQuote(object location, out string? refusal)
     {
-        if (!Running || !game!.IsAtRobin(game.Player) ||
-            !Homes.TryGetValue(households.Home(game.LocalId), out var home) ||
-            GameApi.Read(home.Interior, "owner") is not { } owner ||
-            GameApi.Level(owner) is not (0 or 1 or 2))
+        if (!Running)
+            refusal = fault ? "state-fault" : "not-ready";
+        else if (!households.IsGuest(game!.LocalId))
+            refusal = "upgrade-unavailable";
+        else if (GameApi.LocationName(location) != "ScienceHouse" || !game.IsAtRobin(game.Player))
+            refusal = "robin-unavailable";
+        else
         {
-            Tell("upgrade-unavailable");
-            return;
+            long id = households.Home(game.LocalId);
+            if (households.Rules(id).Upgrade == Core.UpgradePolicy.Disabled)
+                refusal = "upgrade-disabled";
+            else if (!IsOnline(id) || !SameVersion(id))
+                refusal = "upgrade-owner-offline";
+            else if (!AllPeersReady())
+                refusal = "peer-missing";
+            else if (!Homes.TryGetValue(id, out var home) || GameApi.Read(home.Interior, "owner") is not { } owner)
+                refusal = "upgrade-unavailable";
+            else
+            {
+                int level = GameApi.Level(owner);
+                refusal = game.UpgradeBlock(owner, level);
+                if (refusal is null)
+                    return new RobinQuote(id, level);
+            }
         }
-        if (households.Rules(home.Owner).Upgrade == Core.UpgradePolicy.Disabled)
-        {
-            Tell("upgrade-disabled");
-            return;
-        }
-        string quote = Helper.Translation.Get("robin-quote", new
-        {
-            player = game.Name(home.Owner), price = Quote(GameApi.Level(owner))
-        }).ToString();
-        Confirm(quote, yes => { if (yes) Submit("upgrade"); });
+        return null;
     }
+
+    private void ShowRobinQuote(RobinQuote selected)
+    {
+        try
+        {
+            var quote = GetRobinQuote(game!.Current, out string? refusal);
+            if (quote != selected)
+            {
+                string code = refusal ?? "upgrade-quote-changed";
+                LogRobin($"quote refused owner={selected.Owner} level={selected.Level} reason={code}");
+                Tell(code);
+                return;
+            }
+            string text = Helper.Translation.Get("robin-quote", new
+            {
+                player = game.Name(selected.Owner), price = Quote(selected.Level)
+            }).ToString();
+            LogRobin($"quote displayed owner={selected.Owner} level={selected.Level}");
+            Confirm(text, yes =>
+            {
+                LogRobin($"quote answered owner={selected.Owner} level={selected.Level} accepted={yes}");
+                if (yes)
+                    Submit("upgrade", player: selected.Owner, upgradeLevel: selected.Level);
+            });
+        }
+        catch (Exception ex)
+        {
+            Monitor.Log($"Stok House could not open Robin's quote for owner={selected.Owner}: {ex}", LogLevel.Error);
+            Tell("upgrade-error");
+        }
+    }
+
+    private void LogRobin(string message) => Monitor.Log($"Robin: {message}", LogLevel.Trace);
 }
