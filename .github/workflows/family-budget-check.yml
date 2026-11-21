@@ -1,0 +1,37 @@
+name: Verify family budget model
+
+on:
+  push:
+    branches: ['feature/family-budget']
+    paths:
+      - 'experiments/FamilyBudget/**'
+      - '.github/workflows/family-budget-check.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-2022
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: |
+            8.0.419
+            6.0.428
+      - name: Run the model and save-coordination tests
+        shell: pwsh
+        run: dotnet run -c Release --project experiments/FamilyBudget
+      - name: Check signatures from the 1.6.15 reference assembly
+        shell: pwsh
+        run: |
+          $reference = Join-Path $env:RUNNER_TEMP 'Stardew Valley.dll'
+          Invoke-WebRequest 'https://raw.githubusercontent.com/StardewModders/mod-reference-assemblies/0141355fecb8536715ecff22f99374b5e632cbed/Stardew%20Valley.dll' -OutFile $reference
+          if ((Get-FileHash -Path $reference -Algorithm SHA256).Hash -ne '1b3eceadd655216e207fc2de7753e241fa19edd1a69822c78e2e53574b7c3f34') {
+            throw 'The Stardew Valley reference assembly checksum did not match.'
+          }
+          dotnet run --no-build -c Release --project experiments/FamilyBudget -- --verify-contract $reference

@@ -3,8 +3,18 @@ using StokHouse.FamilyBudget.Spec;
 
 if (args.Length != 0)
 {
+    if (args is ["--contract" or "--verify-contract", { } reference])
+    {
+        var contract = MoneyAudit.Describe(reference);
+        Console.WriteLine($"Assembly {contract.Version}, reference assembly: {contract.ReferenceOnly}.");
+        if (args[0] == "--verify-contract")
+            MoneyAudit.VerifyGameContract(contract);
+        foreach (string signature in contract.Signatures)
+            Console.WriteLine(signature);
+        return;
+    }
     if (args is not ["--audit", { } path])
-        throw new ArgumentException("Usage: --audit <path to Stardew Valley.dll>");
+        throw new ArgumentException("Usage: --audit|--contract|--verify-contract <path to Stardew Valley.dll>");
     var entries = MoneyAudit.Read(path);
     if (entries.Count == 0)
         throw new InvalidDataException("No known Stardew Valley money paths were found in this assembly.");
@@ -249,13 +259,17 @@ Test("a long stream of duplicated expenses, credits and snapshots reconciles exa
 
 Test("the engine audit indexes direct calls and fields without loading the scanned assembly", () =>
 {
-    var paths = MoneyAudit.Read(typeof(StardewValley.AuditFixture).Assembly.Location)
+    string fixture = typeof(StardewValley.AuditFixture).Assembly.Location;
+    var contract = MoneyAudit.Describe(fixture);
+    Check(!contract.ReferenceOnly && contract.Signatures.Contains("instance System.Int32 StardewValley.Farmer.get_Money()"));
+    var paths = MoneyAudit.Read(fixture)
         .Where(site => site.Caller == "StardewValley.AuditFixture.Credit")
         .Select(site => site.Target).ToHashSet();
     Check(paths.SetEquals(new[] { "StardewValley.Farmer.get_Money", "StardewValley.Farmer.set_Money", "StardewValley.FarmerTeam.money" }));
 });
 
-Console.WriteLine($"Family budget model and audit checks passed: {passed}.");
+HostChecks.Run(Test);
+Console.WriteLine($"Family budget model, save coordination and audit checks passed: {passed}.");
 
 void Test(string name, Action run)
 {

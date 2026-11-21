@@ -25,6 +25,51 @@ internal static class MoneyAudit
         "StardewValley.Menus.ShopMenu.getPlayerCurrencyAmount", "StardewValley.Menus.ShopMenu.chargePlayer"
     };
 
+    private static readonly string[] AdditionalContracts =
+    {
+        "StardewValley.Farmer.isActive", "StardewValley.Farmer.daysUntilHouseUpgrade",
+        "StardewValley.Farmer.get_team", "StardewValley.Farmer.get_Items",
+        "StardewValley.GameLocation.houseUpgradeAccept",
+        "StardewValley.Locations.ManorHouse.MergeWallets", "StardewValley.Locations.ManorHouse.SeparateWallets",
+        "StardewValley.Game1.getAllFarmers", "StardewValley.Menus.ShopMenu.tryToPurchaseItem"
+    };
+
+    internal sealed record Contract(Version Version, bool ReferenceOnly, string[] Signatures);
+
+    internal static Contract Describe(string path)
+    {
+        using var dll = File.OpenRead(path);
+        using var pe = new PEReader(dll);
+        var metadata = pe.GetMetadataReader();
+        var definition = new AssemblyContract(metadata);
+        var signatures = definition.Describe(Targets.Concat(AdditionalContracts))
+            .OrderBy(member => member, StringComparer.Ordinal).ToArray();
+        return new Contract(metadata.GetAssemblyDefinition().Version, definition.ReferenceOnly, signatures);
+    }
+
+    internal static void VerifyGameContract(Contract contract)
+    {
+        var expected = new[]
+        {
+            "instance System.Int32 StardewValley.Farmer.get_Money()",
+            "instance System.Void StardewValley.Farmer.set_Money(System.Int32)",
+            "instance Netcode.NetIntDelta StardewValley.FarmerTeam.GetMoney(StardewValley.Farmer)",
+            "instance System.Void StardewValley.FarmerTeam.AddIndividualMoney(StardewValley.Farmer, System.Int32)",
+            "instance System.Void StardewValley.FarmerTeam.SetIndividualMoney(StardewValley.Farmer, System.Int32)",
+            "instance System.Boolean StardewValley.Menus.ShopMenu.tryToPurchaseItem(StardewValley.ISalable, StardewValley.ISalable, System.Int32, System.Int32, System.Int32)",
+            "static System.Void StardewValley.Menus.ShopMenu.chargePlayer(StardewValley.Farmer, System.Int32, System.Int32)",
+            "instance System.Void StardewValley.GameLocation.houseUpgradeAccept()",
+            "Netcode.NetInt StardewValley.Farmer.daysUntilHouseUpgrade",
+            "static System.Void StardewValley.Locations.ManorHouse.MergeWallets()",
+            "static System.Void StardewValley.Locations.ManorHouse.SeparateWallets()"
+        };
+        if (contract.Version != new Version(1, 6, 15, 24356))
+            throw new InvalidDataException($"The expected Windows game version is 1.6.15.24356. Found {contract.Version}.");
+        var missing = expected.Except(contract.Signatures, StringComparer.Ordinal).ToArray();
+        if (missing.Length > 0)
+            throw new InvalidDataException($"Missing game signatures: {string.Join("; ", missing)}.");
+    }
+
     internal sealed record Site(string Caller, int Offset, string Target);
 
     internal static IReadOnlyList<Site> Read(string path)
@@ -32,6 +77,8 @@ internal static class MoneyAudit
         using var dll = File.OpenRead(path);
         using var pe = new PEReader(dll);
         var metadata = pe.GetMetadataReader();
+        if (new AssemblyContract(metadata).ReferenceOnly)
+            throw new InvalidDataException("This is a reference assembly. Supply the installed game for an IL audit.");
         var sites = new List<Site>();
         foreach (var handle in metadata.MethodDefinitions)
         {
@@ -60,7 +107,7 @@ internal static class MoneyAudit
         return sites;
     }
 
-    private static string? Resolve(MetadataReader metadata, EntityHandle handle)
+    internal static string? Resolve(MetadataReader metadata, EntityHandle handle)
     {
         switch (handle.Kind)
         {
@@ -84,7 +131,7 @@ internal static class MoneyAudit
     private static string Member(MetadataReader metadata, EntityHandle type, StringHandle name) =>
         TypeName(metadata, type) + "." + metadata.GetString(name);
 
-    private static string TypeName(MetadataReader metadata, EntityHandle type)
+    internal static string TypeName(MetadataReader metadata, EntityHandle type)
     {
         if (type.Kind == HandleKind.TypeDefinition)
         {
