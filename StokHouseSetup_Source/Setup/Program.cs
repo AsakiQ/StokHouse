@@ -204,7 +204,7 @@ internal sealed class SetupWindow : Form
         }
         else if (action == "remove")
         {
-            if (!Confirm("Перед удалением мода хост должен вернуть всех в штатные дома через F8 и завершить игровой день. Удалить Stok House?"))
+            if (!Confirm("Перед удалением мода хост должен вернуть всех в штатные дома через меню Stok House (по умолчанию английская O) и завершить игровой день. Удалить Stok House?"))
                 return;
         }
         else

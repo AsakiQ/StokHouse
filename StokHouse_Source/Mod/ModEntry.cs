@@ -20,6 +20,7 @@ public sealed partial class ModEntry : Mod
     private readonly Queue<Action> dialogs = new();
     private GameApi? game;
     private ModConfig config = new();
+    private string startup = "pending";
     private Households households = new(HouseholdData.Empty());
     private bool active;
     private bool ready;
@@ -34,7 +35,8 @@ public sealed partial class ModEntry : Mod
 
     public override void Entry(IModHelper helper)
     {
-        config = helper.ReadConfig<ModConfig>();
+        config = ModConfig.Load(Path.Combine(helper.DirectoryPath, "config.json"),
+            message => Monitor.Log(message, LogLevel.Info), message => Monitor.Log(message, LogLevel.Warn));
         helper.Events.GameLoop.GameLaunched += OnLaunched;
         helper.Events.GameLoop.SaveLoaded += OnSaveLoaded;
         helper.Events.GameLoop.ReturnedToTitle += (_, _) => Clear();
@@ -44,25 +46,35 @@ public sealed partial class ModEntry : Mod
         helper.Events.Multiplayer.PeerDisconnected += OnDisconnect;
         helper.Events.Multiplayer.ModMessageReceived += OnMessage;
         helper.ConsoleCommands.Add("stok_house_status", "Show the status of Stok House.", (_, _) =>
-            Monitor.Log($"Stok House. Runtime: {active}, save ready: {ready}, storage fault: {fault}, revision: {revision}.", LogLevel.Info));
+            Monitor.Log($"Stok House. Initialization: {startup}. Menu key: {config.MenuKey}. Save ready: {ready}, storage fault: {fault}, revision: {revision}.", LogLevel.Info));
     }
 
     private void OnLaunched(object? sender, GameLaunchedEventArgs args)
     {
-        var harmony = new Harmony(ModManifest.UniqueID);
+        Harmony? harmony = null;
+        string stage = "resolve game API";
         try
         {
             game = new GameApi();
-            if (game.Version != "1.6.15")
-                throw new NotSupportedException($"Stok House alpha targets Stardew Valley 1.6.15; detected {game.Version}.");
-            GamePatches.Apply(harmony, game, this);
+            stage = "check game version";
+            string version = game.Version;
+            if (version != "1.6.15")
+                throw new NotSupportedException($"Stok House alpha targets Stardew Valley 1.6.15; detected {version}.");
+
+            stage = "resolve and apply Harmony patches";
+            harmony = new Harmony(ModManifest.UniqueID);
+            int applied = GamePatches.Apply(harmony, game, this);
             active = true;
-            Monitor.Log("Stok House hooks bound to Stardew Valley 1.6.15.", LogLevel.Info);
+            startup = $"ready ({applied} Harmony patches)";
+            Monitor.Log($"Stok House ready on Stardew Valley {version}. {applied} Harmony patches, menu key: {config.MenuKey}.", LogLevel.Info);
+            Monitor.Log($"Bound character lookup: {game.CharacterLookup}.", LogLevel.Trace);
         }
         catch (Exception ex)
         {
-            harmony.UnpatchAll(ModManifest.UniqueID);
-            Monitor.Log($"Stok House disabled before changing the world: {ex}", LogLevel.Error);
+            startup = $"failed to {stage}";
+            Monitor.Log($"Stok House disabled before changing the world ({startup}): {ex}", LogLevel.Error);
+            try { harmony?.UnpatchAll(ModManifest.UniqueID); }
+            catch (Exception rollback) { Monitor.Log($"Stok House patch cleanup failed: {rollback}", LogLevel.Error); }
         }
     }
 

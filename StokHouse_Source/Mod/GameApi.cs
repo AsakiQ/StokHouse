@@ -1,7 +1,6 @@
 using System.Collections;
 using System.Linq.Expressions;
 using System.Reflection;
-using HarmonyLib;
 using Microsoft.Xna.Framework;
 
 namespace StokHouse;
@@ -13,42 +12,17 @@ internal sealed record Home(long Owner, string Name, object Interior, object? Ca
 
 internal sealed class GameApi
 {
-    private const BindingFlags Member = BindingFlags.Public | BindingFlags.NonPublic |
-                                        BindingFlags.Instance | BindingFlags.Static | BindingFlags.FlattenHierarchy;
-    private static readonly Dictionary<(Type, string), MemberInfo> Members = new();
-
-    internal static Type Type(string name) =>
-        AccessTools.TypeByName(name) ?? throw new TypeLoadException(name);
-
-    internal static MethodInfo Method(Type type, string name, params Type[] arguments) =>
-        AccessTools.Method(type, name, arguments) ?? throw new MissingMethodException(type.FullName, name);
-
-    internal static object? Read(object target, string name)
-    {
-        Type type = target as Type ?? target.GetType();
-        if (!Members.TryGetValue((type, name), out var member))
-        {
-            member = (MemberInfo?)type.GetProperty(name, Member) ?? type.GetField(name, Member)
-                ?? throw new MissingMemberException(type.FullName, name);
-            Members.Add((type, name), member);
-        }
-        object? instance = target is Type ? null : target;
-        return member is PropertyInfo property ? property.GetValue(instance) : ((FieldInfo)member).GetValue(instance);
-    }
-
-    internal readonly Type Game = Type("StardewValley.Game1");
-    internal readonly Type Farmer = Type("StardewValley.Farmer");
-    internal readonly Type Location = Type("StardewValley.GameLocation");
-    internal readonly Type FarmHouse = Type("StardewValley.Locations.FarmHouse");
-    internal readonly Type Cabin = Type("StardewValley.Locations.Cabin");
-    internal readonly Type Building = Type("StardewValley.Buildings.Building");
-    internal readonly Type Tile = Type("xTile.Dimensions.Location");
-    internal readonly Type Response = Type("StardewValley.Response");
-    internal readonly Type Npc = Type("StardewValley.NPC");
-    internal readonly Type Furniture = Type("StardewValley.Objects.Furniture");
-    internal readonly Type Bed = Type("StardewValley.Objects.BedFurniture");
-    internal readonly Type Wallpaper = Type("StardewValley.Objects.Wallpaper");
-    internal readonly Type SpriteBatch = Type("Microsoft.Xna.Framework.Graphics.SpriteBatch");
+    internal readonly Type Game;
+    internal readonly Type Farmer;
+    internal readonly Type Location;
+    internal readonly Type FarmHouse;
+    internal readonly Type Cabin;
+    internal readonly Type Building;
+    internal readonly Type Tile;
+    internal readonly Type Response;
+    internal readonly Type Furniture;
+    internal readonly Type Bed;
+    internal readonly Type Wallpaper;
 
     private readonly MethodInfo getFarm;
     private readonly MethodInfo getAllFarmers;
@@ -61,29 +35,69 @@ internal sealed class GameApi
     private readonly MethodInfo getEntry;
     private readonly MethodInfo warp;
     private readonly MethodInfo question;
+    private readonly ConstructorInfo createResponse;
     private readonly MethodInfo hud;
     private readonly MethodInfo upgrade;
     private readonly MethodInfo construction;
 
-    internal GameApi()
+    private readonly MethodInfo readMailbox;
+    private readonly MethodInfo containsItem;
+    private readonly MethodInfo getModData;
+    private readonly MethodInfo setModData;
+
+    internal string CharacterLookup => GameReflection.Signature(getCharacter);
+
+    internal GameApi(Func<string, Type>? resolveType = null)
     {
-        getFarm = Method(Game, "getFarm");
-        getAllFarmers = Method(Game, "getAllFarmers");
-        getOnlineFarmers = Method(Game, "getOnlineFarmers");
-        getCharacter = Method(Game, "getCharacterFromName", typeof(string), typeof(bool), typeof(bool));
-        getBuildingInterior = Method(Building, "GetIndoors");
-        getMainHouse = Method(Type("StardewValley.Utility"), "getHomeOfFarmer", Farmer);
-        getMainMailbox = Method(Type("StardewValley.Farm"), "GetMainMailboxPosition");
-        getCabinMailbox = Method(Building, "getMailboxPosition");
-        getEntry = Method(FarmHouse, "getEntryLocation");
-        warp = Method(Game, "warpFarmer", typeof(string), typeof(int), typeof(int), typeof(int), typeof(bool));
-        Type afterQuestion = AccessTools.Inner(Location, "afterQuestionBehavior")
-            ?? throw new TypeLoadException("GameLocation.afterQuestionBehavior");
-        question = Method(Location, "createQuestionDialogue", typeof(string), Response.MakeArrayType(), afterQuestion, Npc);
-        hud = Method(Game, "showGlobalMessage", typeof(string));
-        upgrade = Method(Location, "houseUpgradeAccept");
-        construction = Method(Game, "IsThereABuildingUnderConstruction", typeof(string));
+        resolveType ??= GameReflection.Type;
+        Game = resolveType("StardewValley.Game1");
+        Farmer = resolveType("StardewValley.Farmer");
+        Location = resolveType("StardewValley.GameLocation");
+        FarmHouse = resolveType("StardewValley.Locations.FarmHouse");
+        Cabin = resolveType("StardewValley.Locations.Cabin");
+        Building = resolveType("StardewValley.Buildings.Building");
+        Tile = resolveType("xTile.Dimensions.Location");
+        Response = resolveType("StardewValley.Response");
+        Furniture = resolveType("StardewValley.Objects.Furniture");
+        Bed = resolveType("StardewValley.Objects.BedFurniture");
+        Wallpaper = resolveType("StardewValley.Objects.Wallpaper");
+        Type npc = resolveType("StardewValley.NPC");
+
+        getFarm = GameReflection.Method(Game, "getFarm", BindingFlags.Static);
+        getAllFarmers = GameReflection.Method(Game, "getAllFarmers", BindingFlags.Static);
+        getOnlineFarmers = GameReflection.Method(Game, "getOnlineFarmers", BindingFlags.Static);
+        getCharacter = GameReflection.Method(Game, "getCharacterFromName", BindingFlags.Static,
+            typeof(string), typeof(bool), typeof(bool));
+        getBuildingInterior = GameReflection.Method(Building, "GetIndoors", BindingFlags.Instance);
+        getMainHouse = GameReflection.Method(resolveType("StardewValley.Utility"), "getHomeOfFarmer",
+            BindingFlags.Static, Farmer);
+        getMainMailbox = GameReflection.Method(resolveType("StardewValley.Farm"), "GetMainMailboxPosition",
+            BindingFlags.Instance);
+        getCabinMailbox = GameReflection.Method(Building, "getMailboxPosition", BindingFlags.Instance);
+        getEntry = GameReflection.Method(FarmHouse, "getEntryLocation", BindingFlags.Instance);
+        warp = GameReflection.Method(Game, "warpFarmer", BindingFlags.Static,
+            typeof(string), typeof(int), typeof(int), typeof(int), typeof(bool));
+        Type afterQuestion = Location.GetNestedType("afterQuestionBehavior", BindingFlags.Public | BindingFlags.NonPublic)
+            ?? throw new TypeLoadException($"Stok House could not bind {Location.FullName}.afterQuestionBehavior.");
+        GameReflection.Method(afterQuestion, "Invoke", BindingFlags.Instance, Farmer, typeof(string));
+        createResponse = Response.GetConstructor(BindingFlags.Public | BindingFlags.Instance | BindingFlags.ExactBinding,
+            binder: null, new[] { typeof(string), typeof(string) }, modifiers: null)
+            ?? throw new MissingMethodException($"Could not bind {Response.FullName}(System.String, System.String).");
+        question = GameReflection.Method(Location, "createQuestionDialogue", BindingFlags.Instance,
+            typeof(string), Response.MakeArrayType(), afterQuestion, npc);
+        hud = GameReflection.Method(Game, "showGlobalMessage", BindingFlags.Static, typeof(string));
+        upgrade = GameReflection.Method(Location, "houseUpgradeAccept", BindingFlags.Instance);
+        construction = GameReflection.Method(Game, "IsThereABuildingUnderConstruction", BindingFlags.Static, typeof(string));
+        readMailbox = GameReflection.Method(Location, "mailbox", BindingFlags.Instance);
+
+        Type inventory = GameReflection.MemberType(Farmer, "Items");
+        containsItem = GameReflection.Method(inventory, "ContainsId", BindingFlags.Instance, typeof(string), typeof(int));
+        Type modData = GameReflection.MemberType(Farmer, "modData");
+        getModData = GameReflection.Method(modData, "TryGetValue", BindingFlags.Instance, typeof(string), typeof(string).MakeByRefType());
+        setModData = GameReflection.Method(modData, "set_Item", BindingFlags.Instance, typeof(string), typeof(string));
     }
+
+    internal static object? Read(object target, string name) => GameReflection.Read(target, name);
 
     internal string Version => (string)Read(Game, "version")!;
     internal object Player => Read(Game, "player")!;
@@ -176,8 +190,7 @@ internal sealed class GameApi
         if (item is not null)
         {
             object items = Read(player, "Items")!;
-            var contains = Method(items.GetType(), "ContainsId", typeof(string), typeof(int));
-            if (!(bool)contains.Invoke(items, new object[] { item, quantity })!)
+            if (!(bool)containsItem.Invoke(items, new object[] { item, quantity })!)
                 return "materials";
         }
 
@@ -197,15 +210,16 @@ internal sealed class GameApi
     {
         object data = Read(Master, "modData")!;
         var values = new object?[] { key, null };
-        var method = Method(data.GetType(), "TryGetValue", typeof(string), typeof(string).MakeByRefType());
-        return (bool)method.Invoke(data, values)! ? (string?)values[1] : null;
+        return (bool)getModData.Invoke(data, values)! ? (string?)values[1] : null;
     }
 
     internal void Store(string key, string value)
     {
         object data = Read(Master, "modData")!;
-        Method(data.GetType(), "set_Item", typeof(string), typeof(string)).Invoke(data, new object[] { key, value });
+        setModData.Invoke(data, new object[] { key, value });
     }
+
+    internal void OpenMailbox(object location) => readMailbox.Invoke(location, null);
 
     internal void Hud(string message) => hud.Invoke(null, new object[] { message });
 
@@ -219,13 +233,13 @@ internal sealed class GameApi
         {
             if (!inserted && (string)Read(response, "responseKey")! == "Leave")
             {
-                copy.SetValue(Activator.CreateInstance(Response, key, text), index++);
+                copy.SetValue(createResponse.Invoke(new[] { key, text }), index++);
                 inserted = true;
             }
             copy.SetValue(response, index++);
         }
         if (!inserted)
-            copy.SetValue(Activator.CreateInstance(Response, key, text), index);
+            copy.SetValue(createResponse.Invoke(new[] { key, text }), index);
         return copy;
     }
 
@@ -233,7 +247,7 @@ internal sealed class GameApi
     {
         Array answers = Array.CreateInstance(Response, choices.Count);
         for (int i = 0; i < choices.Count; i++)
-            answers.SetValue(Activator.CreateInstance(Response, choices[i].Key, choices[i].Label), i);
+            answers.SetValue(createResponse.Invoke(new[] { choices[i].Key, choices[i].Label }), i);
         Type callback = question.GetParameters()[2].ParameterType;
         var player = Expression.Parameter(Farmer, "player");
         var answer = Expression.Parameter(typeof(string), "answer");

@@ -35,6 +35,7 @@ if (!$GamePath -or $Test) {
 }
 
 $mod = Join-Path $PSScriptRoot "StokHouse_Source/Mod/StokHouse.csproj"
+$initTests = Join-Path $PSScriptRoot "StokHouse_Source/InitializationTests/StokHouse.Initialization.Tests.csproj"
 $modTests = Join-Path $PSScriptRoot "StokHouse_Source/Tests/StokHouse.Core.Tests.csproj"
 $setup = Join-Path $PSScriptRoot "StokHouseSetup_Source/Setup/StokHouseSetup.csproj"
 $setupTests = Join-Path $PSScriptRoot "StokHouseSetup_Source/Tests/StokHouse.Setup.Tests.csproj"
@@ -72,6 +73,12 @@ if ($GamePath) {
 Invoke-Native $Dotnet @("build", $mod, "-c", "Release", $reference)
 Invoke-Native $Python @($packScript)
 if ($Test) {
+    Invoke-Native $Dotnet @("build", $initTests, "-c", "Release", $reference, "-m:1")
+    $initArgs = @("run", "--no-build", "--project", $initTests, "-c", "Release")
+    if ($GamePath) {
+        $initArgs += @("--", "--game-path", $GamePath)
+    }
+    Invoke-Native $Dotnet $initArgs
     Invoke-Native $Dotnet @("run", "--project", $modTests, "-c", "Release")
     Invoke-Native $Dotnet @("run", "--project", $setupTests, "-c", "Release", "--", $package, $SmapiArchive)
 }

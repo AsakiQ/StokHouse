@@ -1,51 +1,73 @@
+using System.Reflection;
 using HarmonyLib;
 using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework.Graphics;
 
 namespace StokHouse;
 
 public sealed partial class ModEntry
 {
-    private static class GamePatches
+    internal static class GamePatches
     {
         private static ModEntry mod = null!;
         private static GameApi game = null!;
-        private static readonly System.Reflection.BindingFlags Methods =
-            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic;
 
-        internal static void Apply(Harmony harmony, GameApi api, ModEntry owner)
+        internal static int Apply(Harmony harmony, GameApi api, ModEntry owner)
         {
             mod = owner;
             game = api;
 
-            Patch(api.Building, "draw", nameof(DrawCabin), false, api.SpriteBatch);
-            Patch(api.Building, "drawBackground", nameof(DrawCabin), false, api.SpriteBatch);
-            Patch(api.Building, "drawShadow", nameof(DrawCabin), false, api.SpriteBatch, typeof(int), typeof(int));
-            Patch(api.Building, "drawInConstruction", nameof(DrawCabin), false, api.SpriteBatch);
-            Patch(api.Building, "isTilePassable", nameof(CabinPassable), false, typeof(Vector2));
-            Patch(api.Building, "intersects", nameof(CabinDoesNotIntersect), false, typeof(Rectangle));
-            Patch(api.Building, "doAction", nameof(CabinDoesNotIntersect), false, typeof(Vector2), api.Farmer);
-            Patch(api.Building, "isActionableTile", nameof(CabinDoesNotIntersect), false, typeof(int), typeof(int), api.Farmer);
-            Patch(api.Building, "doesTileHaveProperty", nameof(CabinTileProperty), false,
+            // Resolve every target before changing any game method.
+            var patches = Resolve(api);
+            foreach (var (original, handler, postfix) in patches)
+            {
+                var patch = new HarmonyMethod(handler);
+                try
+                {
+                    harmony.Patch(original, prefix: postfix ? null : patch, postfix: postfix ? patch : null);
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException($"Could not apply {handler.Name} to {GameReflection.Signature(original)}.", ex);
+                }
+            }
+            return patches.Count;
+        }
+
+        internal static IReadOnlyList<(MethodInfo Original, MethodInfo Handler, bool Postfix)> Resolve(GameApi api)
+        {
+            var patches = new List<(MethodInfo, MethodInfo, bool)>();
+            Patch(api.Building, "draw", DrawCabin, false, typeof(SpriteBatch));
+            Patch(api.Building, "drawBackground", DrawCabin, false, typeof(SpriteBatch));
+            Patch(api.Building, "drawShadow", DrawCabin, false, typeof(SpriteBatch), typeof(int), typeof(int));
+            Patch(api.Building, "drawInConstruction", DrawCabin, false, typeof(SpriteBatch));
+            Patch(api.Building, "isTilePassable", CabinPassable, false, typeof(Vector2));
+            Patch(api.Building, "intersects", CabinDoesNotIntersect, false, typeof(Rectangle));
+            Patch(api.Building, "doAction", CabinDoesNotIntersect, false, typeof(Vector2), api.Farmer);
+            Patch(api.Building, "isActionableTile", CabinDoesNotIntersect, false, typeof(int), typeof(int), api.Farmer);
+            Patch(api.Building, "doesTileHaveProperty", CabinTileProperty, false,
                 typeof(int), typeof(int), typeof(string), typeof(string), typeof(string).MakeByRefType());
-            Patch(api.Location, "destroyStructure", nameof(ProtectDemolition), false, api.Building);
-            Patch(api.Farmer, "getMailboxPosition", nameof(MailIndicator), true);
-            Patch(api.Location, "performAction", nameof(MailAction), false, typeof(string[]), api.Farmer, api.Tile);
-            Patch(api.Location, "createQuestionDialogue", nameof(RobinChoices), false,
+            Patch(api.Location, "destroyStructure", ProtectDemolition, false, api.Building);
+            Patch(api.Farmer, "getMailboxPosition", MailIndicator, postfix: true);
+            Patch(api.Location, "performAction", MailAction, false, typeof(string[]), api.Farmer, api.Tile);
+            Patch(api.Location, "createQuestionDialogue", RobinChoices, false,
                 typeof(string), api.Response.MakeArrayType(), typeof(string));
-            Patch(api.Location, "answerDialogueAction", nameof(RobinAnswer), false, typeof(string), typeof(string[]));
-            Patch(api.Furniture, "canBeRemoved", nameof(FurnitureRemove), false, api.Farmer);
-            Patch(api.Bed, "canBeRemoved", nameof(FurnitureRemove), false, api.Farmer);
-            Patch(api.Bed, "CanModifyBed", nameof(BedPermission), false, api.Farmer);
-            Patch(api.Furniture, "placementAction", nameof(FurniturePlace), false,
+            Patch(api.Location, "answerDialogueAction", RobinAnswer, false, typeof(string), typeof(string[]));
+            Patch(api.Furniture, "canBeRemoved", FurnitureRemove, false, api.Farmer);
+            Patch(api.Bed, "canBeRemoved", FurnitureRemove, false, api.Farmer);
+            Patch(api.Bed, "CanModifyBed", BedPermission, false, api.Farmer);
+            Patch(api.Furniture, "placementAction", FurniturePlace, false,
                 api.Location, typeof(int), typeof(int), api.Farmer);
-            Patch(api.Wallpaper, "placementAction", nameof(FurniturePlace), false,
+            Patch(api.Wallpaper, "placementAction", FurniturePlace, false,
                 api.Location, typeof(int), typeof(int), api.Farmer);
 
-            void Patch(Type type, string method, string handler, bool postfix, params Type[] parameters)
+            return patches;
+
+            void Patch(Type type, string method, Delegate handler, bool postfix, params Type[] parameters)
             {
-                var original = GameApi.Method(type, method, parameters);
-                var patch = new HarmonyMethod(typeof(GamePatches).GetMethod(handler, Methods));
-                harmony.Patch(original, prefix: postfix ? null : patch, postfix: postfix ? patch : null);
+                var original = GameReflection.Method(type, method,
+                    BindingFlags.Instance | BindingFlags.DeclaredOnly, parameters);
+                patches.Add((original, handler.Method, postfix));
             }
         }
 
@@ -100,7 +122,7 @@ public sealed partial class ModEntry
             if (mod.Homes.TryGetValue(owner, out var home) && clicked == game.Mailbox(home) &&
                 mod.households.IsGuest(local))
             {
-                GameApi.Method(game.Location, "mailbox").Invoke(__instance, null);
+                game.OpenMailbox(__instance);
                 __result = true;
                 return false;
             }

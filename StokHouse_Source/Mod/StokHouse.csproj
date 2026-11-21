@@ -9,6 +9,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Core/StokHouse.Core.csproj" />
+    <InternalsVisibleTo Include="StokHouse.Initialization.Tests" />
     <Reference Include="StardewModdingAPI" HintPath="$(SmapiPath)/StardewModdingAPI.dll" Private="false" />
     <Reference Include="0Harmony" HintPath="$(SmapiPath)/smapi-internal/0Harmony.dll" Private="false" />
     <Reference Include="SMAPI.Toolkit.CoreInterfaces" HintPath="$(SmapiPath)/smapi-internal/SMAPI.Toolkit.CoreInterfaces.dll" Private="false" />
