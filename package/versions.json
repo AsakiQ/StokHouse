@@ -1,0 +1,6 @@
+{
+  "gameVersion": "1.6.15",
+  "smapiVersion": "4.5.2",
+  "smapiUrl": "https://github.com/Pathoschild/SMAPI/releases/download/4.5.2/SMAPI-4.5.2-installer.zip",
+  "smapiSha256": "dd01ddca7b566bfe0d3b3d2d03833496abc56c53da976241f2ab443f5484acc4"
+}

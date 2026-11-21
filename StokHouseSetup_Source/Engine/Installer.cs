@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Net.Http;
+using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace StokHouse.Setup;
@@ -99,6 +100,36 @@ public sealed class Installer
         }
     }
 
+    public static void VerifyEmbeddedPackage(Modpack pack, byte[] payload)
+    {
+        string hash = Convert.ToHexString(SHA256.HashData(payload));
+        if (!hash.Equals(pack.ModSha256, StringComparison.OrdinalIgnoreCase))
+            throw new IOException("Контрольная сумма архива Stok House не совпала.");
+
+        using var archive = new ZipArchive(new MemoryStream(payload, writable: false));
+        if (archive.Entries.Count != pack.ModFiles.Count)
+            throw new IOException("Состав архива Stok House не совпал с конфигурацией.");
+        foreach (var file in pack.ModFiles)
+        {
+            var entry = archive.GetEntry("StokHouse/" + file.Key) ??
+                throw new IOException("Файл Stok House отсутствует в архиве: " + file.Key);
+            using var stream = entry.Open();
+            if (!Convert.ToHexString(SHA256.HashData(stream)).Equals(file.Value, StringComparison.OrdinalIgnoreCase))
+                throw new IOException("Контрольная сумма файла не совпала: " + file.Key);
+        }
+
+        var manifest = archive.GetEntry("StokHouse/manifest.json") ??
+            throw new IOException("Манифест Stok House отсутствует.");
+        using var manifestStream = manifest.Open();
+        using var doc = JsonDocument.Parse(manifestStream);
+        var root = doc.RootElement;
+        if (root.GetProperty("UniqueID").GetString() != Detection.ModId ||
+            root.GetProperty("Version").GetString() != pack.ModVersion ||
+            root.GetProperty("MinimumApiVersion").GetString() != pack.SmapiVersion ||
+            !pack.ModFiles.ContainsKey(root.GetProperty("EntryDll").GetString() ?? ""))
+            throw new IOException("Манифест Stok House не соответствует конфигурации.");
+    }
+
     private static void ExtractMod(string path, string stage)
     {
         ZipFile.ExtractToDirectory(path, stage);
@@ -161,8 +192,8 @@ public sealed class Installer
         {
             progress.Report("Проверка файлов Stok House…");
             string archive = Path.Combine(stage, "mod.zip");
+            VerifyEmbeddedPackage(Pack, modPayload);
             File.WriteAllBytes(archive, modPayload);
-            VerifyHash(archive, Pack.ModSha256);
             string modFiles = Path.Combine(stage, "mod");
             ExtractMod(archive, modFiles);
             string preparedMod = Path.Combine(modFiles, "StokHouse");

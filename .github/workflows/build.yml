@@ -1,0 +1,87 @@
+name: Build Stok House
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      draft_release:
+        description: Create a private draft prerelease after the build
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: |
+            8.0.419
+            6.0.428
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Compile, test, and run the Windows package check
+        shell: pwsh
+        run: ./build.ps1 -Test
+      - name: Stage release files and checksums
+        shell: pwsh
+        run: python package/release.py
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: StokHouse-Windows-x64
+          path: .artifacts/release/*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  draft-release:
+    if: github.event_name == 'workflow_dispatch' && inputs.draft_release && github.event.repository.private && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: stok-house-draft-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: StokHouse-Windows-x64
+          path: release-assets
+      - name: Create a private draft prerelease
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_PROMPT_DISABLED: '1'
+        run: |
+          $visibility = gh api "/repos/$env:GITHUB_REPOSITORY" --jq .visibility
+          if ($LASTEXITCODE -ne 0 -or $visibility -ne 'private') {
+            throw 'The draft can only be created in a private repository.'
+          }
+          $pack = Get-Content release-assets/modpack.json -Raw | ConvertFrom-Json
+          if ($pack.modVersion -cnotmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
+            throw 'The mod version cannot be used as a release tag.'
+          }
+          $tag = "v$($pack.modVersion)"
+          $existing = gh api --paginate "/repos/$env:GITHUB_REPOSITORY/releases" --jq '.[].tag_name'
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot check existing releases.' }
+          if ($existing -contains $tag) { throw "Release $tag already exists." }
+          $assets = @(Get-ChildItem release-assets -File | ForEach-Object FullName)
+          gh release create $tag @assets --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA `
+            --draft --prerelease --title "Stok House $tag" --notes-file docs/RELEASE_NOTES.md
+          if ($LASTEXITCODE -ne 0) { throw 'Draft release creation failed.' }

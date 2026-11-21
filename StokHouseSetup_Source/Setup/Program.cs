@@ -7,26 +7,48 @@ using StokHouse.Setup;
 internal static class Program
 {
     [STAThread]
-    private static void Main()
+    private static int Main(string[] args)
     {
+        if (args is ["--verify-package"])
+        {
+            try
+            {
+                var (embeddedPack, embeddedMod) = LoadPackage();
+                Installer.VerifyEmbeddedPackage(embeddedPack, embeddedMod);
+                return 0;
+            }
+            catch (Exception)
+            {
+                return 1;
+            }
+        }
+
         ApplicationConfiguration.Initialize();
         using var unique = new Mutex(true, "Local\\StokHouseSetup-f0fcb6eb", out bool first);
         if (!first)
         {
             MessageBox.Show("Установщик уже открыт.", "Stok House Setup");
-            return;
+            return 0;
         }
-        var assembly = Assembly.GetExecutingAssembly();
-        using var rawPack = assembly.GetManifestResourceStream("StokHouse.modpack.json")!;
-        var pack = JsonSerializer.Deserialize<Modpack>(rawPack, new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
-        using var rawZip = assembly.GetManifestResourceStream("StokHouse.mod.zip")!;
-        using var bytes = new MemoryStream();
-        rawZip.CopyTo(bytes);
+        var (pack, mod) = LoadPackage();
         string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         string app = Path.Combine(local, "StokHouseSetup");
         var installer = new Installer(app, Path.Combine(appData, "StardewValley", "Saves"), pack);
-        Application.Run(new SetupWindow(installer, bytes.ToArray(), SteamRoots(), app));
+        Application.Run(new SetupWindow(installer, mod, SteamRoots(), app));
+        return 0;
+    }
+
+    private static (Modpack Pack, byte[] Mod) LoadPackage()
+    {
+        var assembly = Assembly.GetExecutingAssembly();
+        using var rawPack = assembly.GetManifestResourceStream("StokHouse.modpack.json")!;
+        var pack = JsonSerializer.Deserialize<Modpack>(rawPack,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+        using var rawZip = assembly.GetManifestResourceStream("StokHouse.mod.zip")!;
+        using var bytes = new MemoryStream();
+        rawZip.CopyTo(bytes);
+        return (pack, bytes.ToArray());
     }
 
     static string[] SteamRoots()

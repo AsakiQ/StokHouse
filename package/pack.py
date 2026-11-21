@@ -24,13 +24,13 @@ with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslev
         info.compress_type = zipfile.ZIP_DEFLATED
         bundle.writestr(info, (dll_root / name).read_bytes())
 
+versions = json.loads((root / "package/versions.json").read_text(encoding="utf-8"))
+if manifest["MinimumApiVersion"] != versions["smapiVersion"]:
+    raise ValueError("The manifest and package disagree on the SMAPI version.")
 pack = {
-    "gameVersion": "1.6.15",
+    **versions,
     "modVersion": manifest["Version"],
     "modSha256": sha(archive),
-    "smapiVersion": manifest["MinimumApiVersion"],
-    "smapiUrl": "https://github.com/Pathoschild/SMAPI/releases/download/4.5.2/SMAPI-4.5.2-installer.zip",
-    "smapiSha256": "dd01ddca7b566bfe0d3b3d2d03833496abc56c53da976241f2ab443f5484acc4",
     "modFiles": {name: sha(dll_root / name) for name in names},
 }
 (result / "modpack.json").write_text(json.dumps(pack, indent=2) + "\n", encoding="utf-8")
