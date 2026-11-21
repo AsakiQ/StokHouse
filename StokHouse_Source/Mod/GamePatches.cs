@@ -93,10 +93,10 @@ public sealed partial class ModEntry
 
         private static bool WalletTransition()
         {
-            if (!mod.active || !Context.IsWorldReady || !Context.IsMainPlayer || !mod.PaymentWalletHeld())
+            if (!mod.active || !Context.IsWorldReady || !Context.IsMainPlayer || !(mod.PaymentWalletHeld() || mod.BudgetBlocksWalletChange()))
                 return true;
             // Keep the same wallet reachable until the held gold is settled. Vanilla retries next night.
-            mod.LogRobin("wallet conversion deferred while an upgrade holds gold");
+            mod.LogRobin("wallet conversion deferred while Stok House holds a payment or family budget");
             return false;
         }
 

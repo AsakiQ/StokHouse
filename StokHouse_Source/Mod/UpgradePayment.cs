@@ -6,7 +6,7 @@ internal enum PaymentPhase { Collect, Schedule, StopScheduling, Refund, Complete
 internal enum ReceiptKind { MaterialsHeld, Started, Refused, Stopped, Returned, NeedsReview }
 internal sealed record PaymentReceipt(Guid Id, ReceiptKind Kind, string? Reason = null);
 internal sealed record UpgradePayment(UpgradeRequest Request, bool OwnerApproved, bool SeparateWallet,
-    PaymentPhase Phase = PaymentPhase.Collect, string? Reason = null, Guid[]? RecentOrders = null, bool Paused = false)
+    PaymentPhase Phase = PaymentPhase.Collect, string? Reason = null, Guid[]? RecentOrders = null, bool Paused = false, Guid? FamilyAccount = null)
 {
     internal bool Active => Phase is not (PaymentPhase.Completed or PaymentPhase.Cancelled);
     internal bool HasSeen(Guid id) => Request.Id == id || RecentOrders?.Contains(id) == true;

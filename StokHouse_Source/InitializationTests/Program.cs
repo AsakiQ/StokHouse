@@ -91,6 +91,7 @@ Test("missing initialization targets fail before any patch is installed", () =>
 
 RobinRegression.Run(Test);
 PaymentRegression.Run(Test);
+BudgetIntegrationTests.Run(Test);
 
 string temp = Path.Combine(Path.GetTempPath(), $"stok-house-config-tests-{Guid.NewGuid():N}");
 Directory.CreateDirectory(temp);

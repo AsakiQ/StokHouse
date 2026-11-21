@@ -1,6 +1,6 @@
 using System.Collections.Immutable;
 
-namespace StokHouse.FamilyBudget.Spec;
+namespace StokHouse.FamilyBudget;
 
 internal sealed record BudgetView(Guid? Account, int? Available, Proposal? Proposal);
 internal sealed record NightWrite(Checkpoint Checkpoint, ImmutableDictionary<long, int> Expected,
@@ -23,19 +23,21 @@ internal sealed class BudgetHost
     private readonly Func<long, long?> residentPartner;
     private readonly Func<bool> separateWallets;
     private readonly Func<Pair, bool> otherPaymentsIdle;
+    private readonly bool collectRemainingGold;
     private NightWrite? staging;
 
     internal BudgetBook Current { get; private set; }
     internal bool NightInProgress => staging is not null;
 
     internal BudgetHost(BudgetBook snapshot, INightBudgetStore store, Func<long, long?> residentPartner,
-        Func<bool> separateWallets, Func<Pair, bool> otherPaymentsIdle)
+        Func<bool> separateWallets, Func<Pair, bool> otherPaymentsIdle, bool collectRemainingGold = false)
     {
         Current = snapshot;
         this.store = store;
         this.residentPartner = residentPartner;
         this.separateWallets = separateWallets;
         this.otherPaymentsIdle = otherPaymentsIdle;
+        this.collectRemainingGold = collectRemainingGold;
     }
 
     internal BudgetView View(long sender)
@@ -82,6 +84,14 @@ internal sealed class BudgetHost
         Current = Current.Resolve(verifiedReceipt);
     }
 
+    internal void ReplaceTransactionBook(BudgetBook book)
+    {
+        RequireOpen();
+        if (book.Farm != Current.Farm || book.Day != Current.Day)
+            throw new InvalidOperationException("Budget update is from another farm or day.");
+        Current = book;
+    }
+
     internal NightWrite BeginSave(Guid id)
     {
         RequireOpen();
@@ -97,13 +107,33 @@ internal sealed class BudgetHost
                 int value = store.ReadPersonal(resident);
                 if (proposal.Kind == ChangeKind.Merge)
                     observed = observed.ObservePersonal(resident, value);
-                else if (value != 0)
+                else if (value != 0 && !collectRemainingGold)
                     throw new InvalidOperationException("A family member has an unexpected personal balance.");
                 expected.Add(resident, value);
             }
         }
 
-        var checkpoint = observed.PrepareNight(id, CurrentPair, otherPaymentsIdle, separateWallets());
+        var projected = observed;
+        if (collectRemainingGold && separateWallets())
+        {
+            foreach (var account in observed.Accounts.Values.Where(account => CurrentPair(account.Pair) && otherPaymentsIdle(account.Pair)))
+            {
+                int first = store.ReadPersonal(account.Pair.First);
+                int second = store.ReadPersonal(account.Pair.Second);
+                if (first < 0 || second < 0)
+                    throw new InvalidOperationException("A personal wallet reports a negative balance.");
+                long combined = (long)account.Balance + first + second;
+                long pendingCredits = observed.Postings.Values.Where(post => post.Budget == account.Id &&
+                    post.State == PostingState.Held && post.Amount > 0).Sum(post => (long)post.Amount);
+                if (combined + pendingCredits > int.MaxValue)
+                    throw new InvalidOperationException("The family account cannot hold the remaining personal gold.");
+                expected[account.Pair.First] = first;
+                expected[account.Pair.Second] = second;
+                if (first != 0 || second != 0)
+                    projected = projected with { Accounts = projected.Accounts.SetItem(account.Id, account with { Balance = (int)combined }) };
+            }
+        }
+        var checkpoint = projected.PrepareNight(id, CurrentPair, otherPaymentsIdle, separateWallets());
         var changes = ImmutableDictionary.CreateBuilder<long, int>();
         foreach (var (resident, value) in expected)
         {
@@ -111,6 +141,10 @@ internal sealed class BudgetHost
             if (value != replacement)
                 changes.Add(resident, replacement);
         }
+        checkpoint = checkpoint with { Next = checkpoint.Next with
+        {
+            SavedWallets = expected.Keys.ToImmutableDictionary(id => id, id => checkpoint.Next.Personal[id])
+        } };
         var pending = new NightWrite(checkpoint, expected.ToImmutable(), changes.ToImmutable());
 
         // Stage must roll back a synchronous failure. Subsequent writes are frozen until

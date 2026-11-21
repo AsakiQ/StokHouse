@@ -18,14 +18,23 @@ internal sealed partial class GameApi
 
     private object Wallet(object payer) => getWallet.Invoke(Read(Master, "team"), new[] { payer })!;
 
+    internal ulong FarmIdentity => (ulong)Read(Game, "uniqueIDForThisGame")!;
+
+    internal void SetPersonalGold(object farmer, int value)
+    {
+        if (!Separate(Master) || value < 0)
+            throw new InvalidOperationException("The family budget requires a personal game wallet.");
+        SetInt(Wallet(farmer), value, setIntValue);
+    }
+
     internal int Gold(object payer) => IntValue(Wallet(payer));
 
     internal bool WalletChangePending => (bool)Read(Read(Master, "changeWalletTypeTonight")!, "Value")!;
 
-    internal string? PaymentResources(object payer, int level)
+    internal string? PaymentResources(object payer, int level, int? available = null)
     {
         var (gold, item, count) = Price(level);
-        if (Gold(payer) < gold)
+        if ((available ?? Gold(payer)) < gold)
             return "funds";
         return item is null || PlanMaterials(payer, item, -count) is not null ? null : "materials";
     }

@@ -10,6 +10,7 @@ namespace StardewValley
     public static class Game1
     {
         public static readonly string version = "1.6.15";
+        public static readonly ulong uniqueIDForThisGame = 763298;
         public static readonly GameLocation currentLocation = new();
         public static readonly Farmer MasterPlayer = new();
         public static Farmer player => MasterPlayer;

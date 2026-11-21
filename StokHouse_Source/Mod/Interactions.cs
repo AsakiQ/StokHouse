@@ -51,6 +51,8 @@ public sealed partial class ModEntry
         var payment = CurrentPayment();
         if (payment is { Paused: false } && payment.Request.Guest == id && payment.Phase is PaymentPhase.Collect or PaymentPhase.Schedule)
             choices.Add(("cancel-upgrade", T("upgrade-cancel")));
+        if (BudgetOptIn)
+            choices.Add(("budget", T("budget-menu")));
         if (id == game.HostId)
             choices.Add(("reset", T("reset")));
 
@@ -60,6 +62,7 @@ public sealed partial class ModEntry
             {
                 case "invite": ShowPlayers(); break;
                 case "rights": ShowRights(); break;
+                case "budget": ShowBudgetMenu(); break;
                 case "leave": Confirm(T("leave-confirm"), yes => { if (yes) Submit("leave"); }); break;
                 case "inbox":
                     if (inbox.Values.OrderBy(item => item.Expires).FirstOrDefault() is { } invite)
@@ -184,9 +187,9 @@ public sealed partial class ModEntry
             RejectUpgrade(actor, "robin-unavailable");
         else if (game.UpgradeBlock(owner, quotedLevel.Value) is { } blocked)
             RejectUpgrade(actor, blocked);
-        else if (game.WalletChangePending)
+        else if (game.WalletChangePending && UpgradeFamilyAccount(actor) is null)
             RejectUpgrade(actor, "upgrade-wallet-change");
-        else if (game.PaymentResources(guest, quotedLevel.Value) is { } resourceError)
+        else if (BudgetUpgradeResources(guest, actor, house, quotedLevel.Value) is { } resourceError)
             RejectUpgrade(actor, resourceError);
         else
         {
@@ -247,7 +250,7 @@ public sealed partial class ModEntry
             blocked = "upgrade-owner-offline";
         else
             blocked = game.UpgradeBlock(farmer, request.Level);
-        if (blocked is null && game!.WalletChangePending)
+        if (blocked is null && game!.WalletChangePending && UpgradeFamilyAccount(request.Guest) is null)
             blocked = "upgrade-wallet-change";
 
         if (blocked is not null)

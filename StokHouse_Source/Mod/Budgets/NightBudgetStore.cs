@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace StokHouse.FamilyBudget.Spec;
+namespace StokHouse.FamilyBudget;
 
 internal enum DiskState { Unknown, NotWritten, Written }
 

@@ -1,4 +1,4 @@
-name: Verify family budget model
+name: Verify Stok House and budget playtest
 
 on:
   push:
@@ -30,6 +30,13 @@ jobs:
       - name: Build and test the existing mod and installer on Windows
         shell: pwsh
         run: ./build.ps1 -Test
+      - name: Compile and test the opt-in budget playtest
+        shell: pwsh
+        run: |
+          $smapi = Join-Path $env:GITHUB_WORKSPACE '.artifacts/smapi-windows'
+          dotnet build StokHouse_Source/InitializationTests -c Release "-p:SmapiPath=$smapi" -p:FamilyBudgetPlaytest=true -m:1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet run --no-build -c Release --project StokHouse_Source/InitializationTests
       - name: Run the model and save-coordination tests
         shell: pwsh
         run: dotnet run -c Release --project experiments/FamilyBudget

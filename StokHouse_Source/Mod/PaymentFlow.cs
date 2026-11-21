@@ -1,6 +1,7 @@
 using System.Text.Json;
 using StardewModdingAPI;
 using StokHouse.Core;
+using StokHouse.FamilyBudget;
 
 namespace StokHouse;
 
@@ -63,7 +64,7 @@ public sealed partial class ModEntry
             else if (!HasPurchaseApproval(ownerApproved, households.Rules(request.Owner).Upgrade, GameApi.Separate(owner)))
                 blocked = "upgrade-approval-required";
             else
-                blocked = game.PaymentResources(payer, request.Level);
+                blocked = BudgetUpgradeResources(payer, request.Guest, request.Owner, request.Level);
         }
         if (blocked is not null)
         {
@@ -74,11 +75,27 @@ public sealed partial class ModEntry
         var order = new UpgradePayment(request, ownerApproved, GameApi.Separate(owner!), RecentOrders: previous?.Archive());
         try
         {
-            StorePayment(order);
-            LogRobin($"authorized order={request.Id} payer={request.Guest} owner={request.Owner} separateWallet={order.SeparateWallet}");
+            if (UpgradeFamilyAccount(request.Guest) is not null)
+            {
+                var funded = FamilyConstruction.Authorize(budgetSession!.Book, request, ownerApproved);
+                order = funded.Order with { RecentOrders = previous?.Archive() };
+                var edit = new PaymentEdit();
+                AppendBudgetUpdate(edit, funded.Book);
+                game.AddDataEdit(edit, game.Master, OrderKey, JsonSerializer.Serialize(order));
+                edit.Commit();
+                AdoptBudgetUpdate(funded.Book);
+            }
+            else
+                StorePayment(order);
+            LogRobin($"authorized order={request.Id} payer={request.Guest} owner={request.Owner} separateWallet={order.SeparateWallet} family={order.FamilyAccount}");
         }
         catch (Exception ex)
         {
+            if (ex is PaymentRecoveryException && order.FamilyAccount is not null)
+            {
+                budgetFault = true;
+                paymentFault = true;
+            }
             households.CompleteUpgrade(request.Id);
             Monitor.Log($"Stok House could not record order {request.Id}: {ex}", LogLevel.Error);
             RejectUpgrade(request.Guest, "upgrade-error");
@@ -91,7 +108,8 @@ public sealed partial class ModEntry
 
     private void CancelPayment(long actor, Guid request)
     {
-        if (CurrentPayment() is not { Active: true, Paused: false } order || order.Request.Guest != actor || order.Request.Id != request)
+        if (CurrentPayment() is not { Active: true, Paused: false } order || order.Request.Guest != actor ||
+            order.Request.Id != request || !BudgetAllowsPayment(order))
         {
             Notify(actor, "expired");
             return;
@@ -106,7 +124,7 @@ public sealed partial class ModEntry
 
     private void CancelPaymentOnDisconnect(long player)
     {
-        if (Running && CurrentPayment() is { Active: true } order &&
+        if (Running && CurrentPayment() is { Active: true } order && BudgetAllowsPayment(order) &&
             (player == order.Request.Guest || player == order.Request.Owner))
         {
             LogRobin($"participant disconnected player={player} order={order.Request.Id} phase={order.Phase}");
@@ -121,6 +139,8 @@ public sealed partial class ModEntry
         var order = CurrentPayment();
         if (paymentFault || order is not { Active: true, Paused: false })
             return;
+        if (!BudgetAllowsPayment(order))
+            return;
 
         try
         {
@@ -132,6 +152,8 @@ public sealed partial class ModEntry
         catch (PaymentRecoveryException ex)
         {
             paymentFault = true;
+            if (Context.IsMainPlayer && order.FamilyAccount is not null)
+                budgetFault = true;
             if (Context.IsMainPlayer)
             {
                 try { StorePayment((CurrentPayment() ?? order) with { Paused = true }); }
@@ -179,12 +201,15 @@ public sealed partial class ModEntry
         var policy = households.Rules(request.Owner).Upgrade;
         if (policy == UpgradePolicy.Disabled)
             return "upgrade-disabled";
-        if (GameApi.Separate(game!.Master) != order.SeparateWallet || game.WalletChangePending)
+        if (GameApi.Separate(game!.Master) != order.SeparateWallet || order.FamilyAccount is null && game.WalletChangePending)
             return "upgrade-wallet-change";
         if (!HasPurchaseApproval(order.OwnerApproved, policy, order.SeparateWallet))
             return "upgrade-approval-required";
         if (game.UpgradeBlock(owner, request.Level) is { } blocked)
             return blocked;
+        if (order.FamilyAccount is not null)
+            return !BudgetOptIn || Context.IsMainPlayer && (!BudgetPeer(request.Guest) || !BudgetPeer(request.Owner))
+                ? "budget-disabled" : null;
         return order.Phase == PaymentPhase.Collect && game.Gold(payer) < GameApi.Price(request.Level).Gold
             ? "funds" : null;
     }
@@ -197,9 +222,23 @@ public sealed partial class ModEntry
         var owner = game.FindFarmer(request.Owner);
         var payerReceipt = ReadReceipt(payer, MaterialsKey, request.Id);
         var ownerReceipt = ReadReceipt(owner, ConstructionKey, request.Id);
-        var next = order.Advance(payerReceipt, ownerReceipt,
-            payer is not null && game.IsSavedOffline(payer), owner is not null && game.IsSavedOffline(owner),
-            order.Phase is PaymentPhase.Collect or PaymentPhase.Schedule ? PaymentInvalid(order, payer, owner) : null);
+        bool payerOffline = payer is not null && game.IsSavedOffline(payer);
+        bool ownerOffline = owner is not null && game.IsSavedOffline(owner);
+        string? invalid = order.Phase is PaymentPhase.Collect or PaymentPhase.Schedule ? PaymentInvalid(order, payer, owner) : null;
+        BudgetBook? familyUpdate = null;
+        PaymentTransition? next;
+        if (order.FamilyAccount is Guid account)
+        {
+            var before = new FamilyConstruction(budgetSession!.Book, account, order);
+            var after = before.Advance(payerReceipt, ownerReceipt, payerOffline, ownerOffline, invalid);
+            if (after == before)
+                return order;
+            next = new PaymentTransition(after.Order);
+            if (after.Book != before.Book)
+                familyUpdate = after.Book;
+        }
+        else
+            next = order.Advance(payerReceipt, ownerReceipt, payerOffline, ownerOffline, invalid);
         if (next is null)
             return order;
 
@@ -210,9 +249,13 @@ public sealed partial class ModEntry
                 return order; // leave the claim in the journal if the original wallet cannot be reached
             game.AddWalletEdit(edit, payer, next.GoldChange);
         }
+        if (familyUpdate is not null)
+            AppendBudgetUpdate(edit, familyUpdate);
         game.AddDataEdit(edit, game.Master, OrderKey, JsonSerializer.Serialize(next.Payment));
         edit.Commit();
-        LogRobin($"order={request.Id} {order.Phase} -> {next.Payment.Phase} goldChange={next.GoldChange} reason={next.Payment.Reason}");
+        if (familyUpdate is not null)
+            AdoptBudgetUpdate(familyUpdate);
+        LogRobin($"order={request.Id} {order.Phase} -> {next.Payment.Phase} goldChange={next.GoldChange} family={order.FamilyAccount} reason={next.Payment.Reason}");
         if (next.Payment.Paused)
         {
             Notify(request.Guest, "upgrade-recovery");

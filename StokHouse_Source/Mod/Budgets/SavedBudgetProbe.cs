@@ -1,14 +1,92 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Xml;
 using System.Xml.Linq;
 
-namespace StokHouse.FamilyBudget.Spec;
+namespace StokHouse.FamilyBudget;
 
 // SMAPI's Saved event signals the end of a save cycle. The main game data file
 // must also contain this exact host snapshot before the new balance is exposed.
 internal static class SavedBudgetProbe
 {
     internal const string JournalKey = "StokHouse.CoopHousing/family-budget";
+
+    internal static string? Fingerprint(string path)
+    {
+        try
+        {
+            using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var digest = SHA256.Create();
+            return Convert.ToHexString(digest.ComputeHash(file));
+        }
+        catch (IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
+    }
+
+    internal static bool HasWallets(string file, ulong farmIdentity, IReadOnlyDictionary<long, int> expected)
+    {
+        if (expected.Count == 0)
+            return true;
+        var reading = new Dictionary<long, int>();
+        ulong? identity = null;
+        try
+        {
+            using var input = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var xml = XmlReader.Create(input, new XmlReaderSettings
+            {
+                DtdProcessing = DtdProcessing.Prohibit,
+                XmlResolver = null,
+                MaxCharactersInDocument = 256 * 1024 * 1024
+            });
+            if (xml.MoveToContent() != XmlNodeType.Element || xml.Name != "SaveGame")
+                return false;
+            bool farmhands = false;
+            while (xml.Read())
+            {
+                if (xml.NodeType == XmlNodeType.EndElement && xml.Depth == 1 && xml.Name == "farmhands")
+                    farmhands = false;
+                if (xml.NodeType != XmlNodeType.Element)
+                    continue;
+                if (xml.Depth == 1 && xml.Name == "uniqueIDForThisGame")
+                {
+                    if (identity is not null || !ulong.TryParse(ReadElement(xml).Value, NumberStyles.None,
+                        CultureInfo.InvariantCulture, out ulong id))
+                        return false;
+                    identity = id;
+                }
+                else if (xml.Depth == 1 && xml.Name == "farmhands" && !xml.IsEmptyElement)
+                    farmhands = true;
+                else if ((xml.Depth == 1 && xml.Name == "player") || (farmhands && xml.Depth == 2 && xml.Name == "Farmer"))
+                {
+                    if (!ReadWallet(xml, out long farmer, out int balance) || !reading.TryAdd(farmer, balance))
+                        return false;
+                }
+            }
+            return identity == farmIdentity && expected.All(pair => reading.TryGetValue(pair.Key, out int balance) && balance == pair.Value);
+        }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+        catch (XmlException) { return false; }
+    }
+
+    private static bool ReadWallet(XmlReader xml, out long id, out int money)
+    {
+        id = 0;
+        money = -1;
+        using var farmer = xml.ReadSubtree();
+        while (farmer.Read())
+        {
+            if (farmer.NodeType != XmlNodeType.Element || farmer.Depth != 1)
+                continue;
+            if (farmer.Name == "UniqueMultiplayerID" && (id != 0 || !long.TryParse(ReadElement(farmer).Value,
+                NumberStyles.Integer, CultureInfo.InvariantCulture, out id)))
+                return false;
+            if (farmer.Name == "money" && (money != -1 || !int.TryParse(ReadElement(farmer).Value,
+                NumberStyles.Integer, CultureInfo.InvariantCulture, out money)))
+                return false;
+        }
+        return id != 0 && money >= 0;
+    }
 
     internal static DiskState Inspect(string file, ulong farmId, string staged, string? previous, bool saveEnded)
     {

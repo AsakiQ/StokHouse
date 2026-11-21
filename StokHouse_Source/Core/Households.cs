@@ -62,6 +62,9 @@ public sealed class Households
         return new("sent");
     }
 
+    public long? InvitationOwner(Guid id, long guest) =>
+        invitations.TryGetValue(id, out var invitation) && invitation.Guest == guest ? invitation.Owner : null;
+
     public Outcome ResolveInvite(Guid id, long actor, bool accept, long host, IReadOnlySet<long> homes,
         int capacity, DateTimeOffset now, out Invitation? resolved)
     {

@@ -1,11 +1,25 @@
 using StokHouse.Core;
 
-namespace StokHouse.FamilyBudget.Spec;
+namespace StokHouse.FamilyBudget;
 
 // This snapshot must be committed in one host write alongside the next native order phase.
 // No gold goes through the farmer's own wallet while the family account funds the order.
 internal sealed record FamilyConstruction(BudgetBook Book, Guid Account, UpgradePayment Order)
 {
+    internal static void VerifySavedOrder(BudgetBook book, UpgradePayment? order)
+    {
+        var holds = book.Postings.Values.Where(post => post.Kind == PostingKind.Construction &&
+            post.State == PostingState.Held).ToArray();
+        if (order is { Active: true, FamilyAccount: Guid account })
+        {
+            if (holds.Length != 1)
+                throw new InvalidDataException("There is no unique hold for the saved family upgrade.");
+            new FamilyConstruction(book, account, order).ValidateReservation(book);
+        }
+        else if (holds.Length != 0)
+            throw new InvalidDataException("A family construction hold has no active game order.");
+    }
+
     internal static FamilyConstruction Authorize(BudgetBook book, UpgradeRequest request, bool ownerApproved)
     {
         if (!ownerApproved)
@@ -17,7 +31,7 @@ internal sealed record FamilyConstruction(BudgetBook Book, Guid Account, Upgrade
             throw new InvalidOperationException("Resume the original order instead of creating a second one.");
         int gold = UpgradeCosts.ForLevel(request.Level).Gold;
         var held = book.Post(request.Id, account.Id, request.Guest, -gold, PostingKind.Construction);
-        return new FamilyConstruction(held, account.Id, new UpgradePayment(request, ownerApproved, SeparateWallet: true));
+        return new FamilyConstruction(held, account.Id, new UpgradePayment(request, ownerApproved, SeparateWallet: true, FamilyAccount: account.Id));
     }
 
     // Purchases and earnings may have been posted while the native order was in flight.
@@ -61,7 +75,7 @@ internal sealed record FamilyConstruction(BudgetBook Book, Guid Account, Upgrade
             PaymentPhase.Cancelled => PostingState.Reversed,
             _ => PostingState.Held
         };
-        if (book.Farm != Book.Farm || !book.Postings.TryGetValue(Order.Request.Id, out var reservation) ||
+        if (Order.FamilyAccount != Account || book.Farm != Book.Farm || !book.Postings.TryGetValue(Order.Request.Id, out var reservation) ||
             reservation.Budget != Account || reservation.Actor != Order.Request.Guest ||
             reservation.Kind != PostingKind.Construction || reservation.State != expected ||
             reservation.Amount != -UpgradeCosts.ForLevel(Order.Request.Level).Gold)

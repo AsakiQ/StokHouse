@@ -37,6 +37,8 @@ public sealed partial class ModEntry : Mod
             message => Monitor.Log(message, LogLevel.Info), message => Monitor.Log(message, LogLevel.Warn));
         helper.Events.GameLoop.GameLaunched += OnLaunched;
         helper.Events.GameLoop.SaveLoaded += OnSaveLoaded;
+        helper.Events.GameLoop.Saving += (_, _) => PrepareBudgetSave();
+        helper.Events.GameLoop.Saved += (_, _) => CompleteBudgetSave();
         helper.Events.GameLoop.ReturnedToTitle += (_, _) => Clear();
         helper.Events.GameLoop.DayStarted += (_, _) => { wasDayStarted = true; };
         helper.Events.GameLoop.UpdateTicked += Tick;
@@ -89,6 +91,7 @@ public sealed partial class ModEntry : Mod
         outbox.Clear();
         offers.Clear();
         ClearPayments();
+        ClearBudgets();
         dialogs.Clear();
         cachedHomes.Clear();
     }
@@ -101,6 +104,7 @@ public sealed partial class ModEntry : Mod
         if (!Context.IsMainPlayer)
         {
             RequestSync();
+            BudgetTick();
             return;
         }
 
@@ -116,6 +120,7 @@ public sealed partial class ModEntry : Mod
             }
             households.ValidateHomes(Homes.Keys.ToHashSet(), game.HostId);
             ready = true;
+            LoadBudgets();
         }
         catch (Exception ex)
         {
@@ -131,6 +136,9 @@ public sealed partial class ModEntry : Mod
 
         if (!Context.IsMainPlayer && !ready && !fault && ++ticksBeforeSync >= 120)
             RequestSync();
+
+        if (args.IsMultipleOf(180))
+            BudgetTick();
 
         if (args.IsMultipleOf(60))
         {
@@ -227,6 +235,7 @@ public sealed partial class ModEntry : Mod
         {
             long player = args.Peer.PlayerID;
             households.ForgetRequests(player);
+            budgetPeers.Remove(player);
             CancelPaymentOnDisconnect(player);
         }
     }
@@ -283,6 +292,7 @@ public sealed partial class ModEntry : Mod
                 case "invitation": ReceiveInvitation(args.ReadAs<Invitation>()); break;
                 case "invitation-out": RememberOutgoing(args.ReadAs<Invitation>()); break;
                 case "upgrade": ReceiveUpgrade(args.ReadAs<UpgradeRequest>()); break;
+                case "budget-state": ReceiveBudgetFrame(args.ReadAs<BudgetFrame>()); break;
             }
         }
         catch (Exception ex)
@@ -330,6 +340,7 @@ public sealed partial class ModEntry : Mod
         relocate |= localHome.HasValue && destination != localHome.Value;
         localHome = destination;
         Send(Frame(), "state");
+        RefreshBudgetFrames();
         return true;
     }
 
@@ -343,6 +354,15 @@ public sealed partial class ModEntry : Mod
         }
         if (!Running || !IsOnline(actor))
             return;
+        if (command.Action == "budget-sync")
+        {
+            if (BudgetOptIn)
+            {
+                budgetPeers.Add(actor);
+                SendBudgetFrame(actor);
+            }
+            return;
+        }
         if (command.Operation == Guid.Empty || seen.ContainsKey((actor, command.Operation)))
             return;
         var now = DateTimeOffset.UtcNow;
@@ -355,6 +375,11 @@ public sealed partial class ModEntry : Mod
         RefreshHomes();
         if (fault)
             return;
+        if (command.Action.StartsWith("budget-", StringComparison.Ordinal))
+        {
+            HandleBudget(actor, command);
+            return;
+        }
         HouseholdData before = households.Export();
         var homes = Homes.Keys.ToHashSet();
         Outcome result;
@@ -375,6 +400,12 @@ public sealed partial class ModEntry : Mod
                 break;
             case "accept":
             case "decline":
+                if (command.Action == "accept" && (BudgetBlocksMove(actor) ||
+                    households.InvitationOwner(command.Request, actor) is long owner && BudgetBlocksMove(owner)))
+                {
+                    Notify(actor, "budget-move-blocked");
+                    return;
+                }
                 if (command.Action == "accept" && IsPayingForUpgrade(actor))
                 {
                     Notify(actor, "upgrade-pending");
@@ -399,6 +430,11 @@ public sealed partial class ModEntry : Mod
                     Notify(cancelled.Guest, "cancelled", actor);
                 break;
             case "leave":
+                if (BudgetBlocksMove(actor))
+                {
+                    Notify(actor, "budget-move-blocked");
+                    return;
+                }
                 if (IsPayingForUpgrade(actor))
                 {
                     Notify(actor, "upgrade-pending");
@@ -412,6 +448,11 @@ public sealed partial class ModEntry : Mod
             case "reset":
                 if (actor != game!.HostId)
                     return;
+                if (BudgetBlocksReset())
+                {
+                    Notify(actor, "budget-move-blocked");
+                    return;
+                }
                 if (CurrentPayment()?.Active == true)
                 {
                     Notify(actor, "upgrade-pending");

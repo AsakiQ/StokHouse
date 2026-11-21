@@ -1,6 +1,6 @@
 using System.Collections.Immutable;
 
-namespace StokHouse.FamilyBudget.Spec;
+namespace StokHouse.FamilyBudget;
 
 internal enum ChangeKind { Merge, Split }
 internal enum PostingKind { Purchase, Sale, Shipping, Reward, Construction }
@@ -33,7 +33,8 @@ internal sealed record ActionReceipt(Guid Operation, long Actor, Guid Budget, Po
 
 internal sealed record BudgetBook(Guid Farm, int Day, Guid Revision, Guid LastCheckpoint, ImmutableDictionary<long, int> Personal,
     ImmutableDictionary<Guid, Budget> Accounts, ImmutableDictionary<Guid, Proposal> Proposals,
-    ImmutableDictionary<Guid, Posting> Postings, ImmutableHashSet<Guid> UsedProposals)
+    ImmutableDictionary<Guid, Posting> Postings, ImmutableHashSet<Guid> UsedProposals,
+    ImmutableDictionary<long, int>? SavedWallets = null)
 {
     internal static BudgetBook Open(Guid farm, int day, IReadOnlyDictionary<long, int> balances)
     {
@@ -44,6 +45,58 @@ internal sealed record BudgetBook(Guid Farm, int Day, Guid Revision, Guid LastCh
     }
 
     internal Budget? ForPlayer(long player) => Accounts.Values.SingleOrDefault(account => account.Pair.Contains(player));
+
+    internal BudgetBook WithPlayers(IEnumerable<long> players)
+    {
+        var personal = Personal.AddRange(players.Where(id => id != 0 && !Personal.ContainsKey(id)).Distinct()
+            .Select(id => new KeyValuePair<long, int>(id, 0)));
+        return personal.Count == Personal.Count ? this : this with { Personal = personal, Revision = Guid.NewGuid() };
+    }
+
+    internal void Validate()
+    {
+        if (Day < 1 || Revision == Guid.Empty || Personal is null || Accounts is null || Proposals is null ||
+            Postings is null || UsedProposals is null || Personal.Any(pair => pair.Key == 0 || pair.Value < 0) ||
+            SavedWallets is { } wallets && wallets.Any(pair => !Personal.ContainsKey(pair.Key) || pair.Value < 0))
+            throw new InvalidDataException("Invalid family budget header.");
+        var members = new HashSet<long>();
+        foreach (var (id, account) in Accounts)
+        {
+            if (id == Guid.Empty || account is null || account.Id != id || account.Balance < 0 ||
+                !ValidPair(account.Pair) || !members.Add(account.Pair.First) || !members.Add(account.Pair.Second) ||
+                Personal[account.Pair.First] != 0 || Personal[account.Pair.Second] != 0)
+                throw new InvalidDataException("Invalid family account.");
+        }
+        members.Clear();
+        foreach (var (id, offer) in Proposals)
+        {
+            if (id == Guid.Empty || offer is null || offer.Id != id || !UsedProposals.Contains(id) ||
+                !ValidPair(offer.Pair) || !offer.Pair.Contains(offer.Sender) || offer.Day < 1 || offer.Day > Day ||
+                !Enum.IsDefined(offer.Kind) || !members.Add(offer.Pair.First) || !members.Add(offer.Pair.Second) ||
+                (offer.Kind == ChangeKind.Split ? offer.Quote is not { First: >= 0, Second: >= 0 } ||
+                    ForPlayer(offer.Pair.First)?.Pair != offer.Pair : offer.Quote is not null ||
+                    ForPlayer(offer.Pair.First) is not null || ForPlayer(offer.Pair.Second) is not null))
+                throw new InvalidDataException("Invalid family budget proposal.");
+        }
+        foreach (var (id, post) in Postings)
+        {
+            if (id == Guid.Empty || post is null || post.Id != id || post.Budget == Guid.Empty || post.Actor == 0 ||
+                post.Amount is 0 or int.MinValue || !Enum.IsDefined(post.Kind) || !Enum.IsDefined(post.State) ||
+                (post.Amount < 0) != (post.Kind is PostingKind.Purchase or PostingKind.Construction) ||
+                post.State == PostingState.Held && (!Accounts.TryGetValue(post.Budget, out var account) || !account.Pair.Contains(post.Actor)))
+                throw new InvalidDataException("Invalid family budget posting.");
+        }
+        foreach (var account in Accounts.Values)
+        {
+            var held = Postings.Values.Where(post => post.Budget == account.Id && post.State == PostingState.Held);
+            if (held.Where(post => post.Amount < 0).Sum(post => -(long)post.Amount) > account.Balance ||
+                held.Where(post => post.Amount > 0).Sum(post => (long)post.Amount) + account.Balance > int.MaxValue)
+                throw new InvalidDataException("Invalid family budget holds.");
+        }
+
+        bool ValidPair(Pair? pair) => pair is not null && pair.First < pair.Second &&
+            Personal.ContainsKey(pair.First) && Personal.ContainsKey(pair.Second);
+    }
 
     internal BudgetBook ObservePersonal(long player, int balance)
     {

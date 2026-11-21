@@ -16,6 +16,7 @@ internal sealed class ModConfig
     };
 
     public SButton MenuKey { get; set; } = SButton.O;
+    public bool FamilyBudgetPlaytest { get; set; }
     public int Capacity { get; set; } = 2;
     public int ConfigVersion { get; set; }
 
