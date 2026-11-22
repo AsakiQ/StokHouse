@@ -12,6 +12,9 @@ files = {
     "StokHouseSetup.exe": package / "setup/StokHouseSetup.exe",
     "StokHouse-mod.zip": package / "StokHouse-mod.zip",
     "modpack.json": package / "modpack.json",
+    "LICENSE": root / "LICENSE",
+    "THIRD_PARTY_NOTICES.md": root / "THIRD_PARTY_NOTICES.md",
+    "RELEASE_NOTES.md": root / "docs/RELEASE_NOTES.md",
 }
 for name, source in files.items():
     shutil.copyfile(source, output / name)
@@ -34,8 +37,9 @@ runtime_packages = {
 }
 docs_path = output / "StokHouse-docs.zip"
 with ZipFile(docs_path, "w", compression=ZIP_DEFLATED) as docs:
-    for name in ("README.md", "docs/HOST.md", "docs/RECOVERY.md", "docs/TESTING.md",
-                 "docs/RELEASES.md", "docs/WORK_BRIEF.md"):
+    for name in ("README.md", "README.en.md", "LICENSE", "THIRD_PARTY_NOTICES.md",
+                 "docs/HOST.md", "docs/RECOVERY.md", "docs/TESTING.md",
+                 "docs/RELEASES.md", "docs/RELEASE_NOTES.md", "docs/WORK_BRIEF.md"):
         docs.write(root / name, name)
     for runtime, notices in runtime_packages.items():
         version = runtime_version(runtime)

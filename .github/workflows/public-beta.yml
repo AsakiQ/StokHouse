@@ -1,0 +1,88 @@
+name: Publish Stok House public beta
+
+# This workflow never publishes from push or pull_request.
+# It can run only on the public default branch, after an explicit typed confirmation.
+on:
+  workflow_dispatch:
+    inputs:
+      publish_confirmation:
+        description: 'Type PUBLISH-v0.1.4-beta.1 only after the owner approves the public release'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: >-
+      github.repository == 'AsakiQ/StokHouse' &&
+      github.event.repository.visibility == 'public' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.publish_confirmation == 'PUBLISH-v0.1.4-beta.1'
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: |
+            8.0.419
+            6.0.428
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Test, compile, and verify Windows setup
+        shell: pwsh
+        run: ./build.ps1 -Test
+      - name: Check that this is the housing-only public beta
+        shell: pwsh
+        run: |
+          $manifest = Get-Content StokHouse_Source/Mod/manifest.json -Raw | ConvertFrom-Json
+          if ($manifest.Version -cne '0.1.4-beta.1') { throw 'Unexpected beta version.' }
+          $project = Get-Content StokHouseSetup_Source/Setup/StokHouseSetup.csproj -Raw
+          if ($project -notmatch '<Version>0\.1\.4-beta\.1</Version>') { throw 'Setup version does not match.' }
+          if (Test-Path StokHouse_Source/Mod/BudgetIntegration.cs) { throw 'Experimental family budget code must not ship in public beta.' }
+          if (Test-Path StokHouse_Source/Mod/Budgets) { throw 'Experimental family budgets unexpectedly present.' }
+      - name: Stage release and checksum all assets
+        shell: pwsh
+        run: python package/release.py
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: StokHouse-v0.1.4-beta.1
+          path: .artifacts/release/*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: StokHouse-v0.1.4-beta.1
+          path: release-assets
+      - name: Publish manually approved pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = 'refs/heads/main'
+          test "$(gh api "/repos/$GITHUB_REPOSITORY" --jq .visibility)" = public
+          test ! -z "$GH_TOKEN"
+          (cd release-assets && sha256sum -c SHA256SUMS.txt)
+          if gh release view v0.1.4-beta.1 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo 'Refusing to overwrite an existing beta release.'
+            exit 1
+          fi
+          gh release create v0.1.4-beta.1 release-assets/* \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+            --title 'Stok House v0.1.4-beta.1 — Public Beta' \
+            --notes-file release-assets/RELEASE_NOTES.md
